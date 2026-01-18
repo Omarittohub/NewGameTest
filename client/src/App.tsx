@@ -269,9 +269,6 @@ function App() {
           </div>
         </div>
 
-        <div className="text-white/60 text-xs">
-          Tip: open a second browser window to join.
-        </div>
       </div>
     );
   }

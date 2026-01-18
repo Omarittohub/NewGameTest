@@ -812,7 +812,7 @@ class Game {
         return summary;
     }
     getState(forPlayerId) {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g;
         // Clone state to avoid mutation and handle masking
         const turnMoves = this.currentTurn ? (_a = this.moves[this.currentTurn]) !== null && _a !== void 0 ? _a : {} : {};
         const banquet = this.computeBanquetSummary();
@@ -851,6 +851,7 @@ class Game {
             scores,
             revealHidden: this.revealHidden,
             deckRemaining: this.deck.length,
+            objectiveResultsPublic: this.revealHidden ? ((_c = this.objectiveResults) !== null && _c !== void 0 ? _c : undefined) : undefined,
             pendingAction: this.pendingKill
                 ? {
                     type: 'kill',
@@ -906,8 +907,8 @@ class Game {
             state.myObjectives = {
                 graceful: myObj.graceful,
                 disgraceful: myObj.disgraceful,
-                gracefulMet: this.revealHidden ? (_d = (_c = this.objectiveResults) === null || _c === void 0 ? void 0 : _c[forPlayerId]) === null || _d === void 0 ? void 0 : _d.gracefulMet : undefined,
-                disgracefulMet: this.revealHidden ? (_f = (_e = this.objectiveResults) === null || _e === void 0 ? void 0 : _e[forPlayerId]) === null || _f === void 0 ? void 0 : _f.disgracefulMet : undefined,
+                gracefulMet: this.revealHidden ? (_e = (_d = this.objectiveResults) === null || _d === void 0 ? void 0 : _d[forPlayerId]) === null || _e === void 0 ? void 0 : _e.gracefulMet : undefined,
+                disgracefulMet: this.revealHidden ? (_g = (_f = this.objectiveResults) === null || _f === void 0 ? void 0 : _f[forPlayerId]) === null || _g === void 0 ? void 0 : _g.disgracefulMet : undefined,
             };
         }
         return state;

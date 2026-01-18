@@ -897,6 +897,7 @@ export class Game {
             scores,
             revealHidden: this.revealHidden,
             deckRemaining: this.deck.length,
+            objectiveResultsPublic: this.revealHidden ? (this.objectiveResults ?? undefined) : undefined,
             pendingAction: this.pendingKill
                 ? {
                     type: 'kill',

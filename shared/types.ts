@@ -116,6 +116,12 @@ export interface GameState {
         deckCounts: Record<CardColor, number>;
         objectivePoints: number;
     }>;
+
+    // At end-of-game only: public objective met flags so score breakdown can explain objective points.
+    objectiveResultsPublic?: Record<string, {
+        gracefulMet: boolean;
+        disgracefulMet: boolean;
+    }>;
     winner?: string;
 
     // End-game standings (present when the game ends).
