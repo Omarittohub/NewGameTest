@@ -88,7 +88,7 @@ const Zone: React.FC<ZoneProps> = ({ id, title, nameBadge, nameBadgeClassName, c
         <div
             ref={setNodeRef}
             className={`
-                relative ${minHeightClassName ?? 'min-h-[160px]'} p-3 rounded-xl flex flex-wrap gap-2 justify-center items-center transition-colors
+                                relative ${minHeightClassName ?? 'min-h-[120px]'} p-2 rounded-xl flex flex-wrap gap-2 justify-center items-center transition-colors
         ${!droppableDisabled && isOver ? 'bg-emerald-500/15 ring-2 ring-emerald-400/60' : 'bg-black/35 ring-1 ring-white/10'}
         ${className}
       `}
@@ -129,7 +129,7 @@ const Zone: React.FC<ZoneProps> = ({ id, title, nameBadge, nameBadgeClassName, c
     );
 };
 
-const TurnChecklistPanel: React.FC<{
+const TurnActionsBubble: React.FC<{
     isMyTurn: boolean;
     turnPlays?: GameState['turnPlays'];
     hasPendingDecision: boolean;
@@ -139,23 +139,20 @@ const TurnChecklistPanel: React.FC<{
         { id: 'self', label: 'Play to My Domain', done: Boolean(turnPlays?.self) },
         { id: 'opponent', label: 'Play to Opponent', done: Boolean(turnPlays?.opponent) },
     ];
-
     const doneCount = items.filter(i => i.done).length;
     const totalCount = items.length;
-    const pct = totalCount === 0 ? 0 : Math.round((doneCount / totalCount) * 100);
 
     return (
-        <div className={`rounded-xl p-3 ring-1 ${isMyTurn ? 'bg-black/40 ring-white/12' : 'bg-black/25 ring-white/10 opacity-90'}`}>
-            <div className="flex items-start justify-between gap-3">
+        <div className="w-[260px] max-w-[calc(100vw-1.5rem)] bg-black/65 backdrop-blur-sm ring-1 ring-white/15 rounded-2xl p-3 shadow-2xl">
+            <div className="flex items-start justify-between gap-2">
                 <div>
                     <div className="text-white/90 font-semibold uppercase text-[11px] tracking-[0.18em]">Turn actions</div>
-                    <div className="mt-1 text-[11px] text-white/55">{doneCount}/{totalCount} done</div>
+                    <div className="mt-0.5 text-[11px] text-white/55">{doneCount}/{totalCount} done</div>
                 </div>
-
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col items-end gap-1">
                     {hasPendingDecision && (
                         <span className="px-2 py-1 rounded-full text-[11px] font-semibold bg-red-500/15 text-red-100 ring-1 ring-red-400/30">
-                            Action required
+                            Action
                         </span>
                     )}
                     <span className={`px-2 py-1 rounded-full text-[11px] font-semibold ring-1 ${isMyTurn ? 'bg-emerald-500/15 text-emerald-100 ring-emerald-400/30' : 'bg-white/5 text-white/60 ring-white/10'}`}>
@@ -164,26 +161,19 @@ const TurnChecklistPanel: React.FC<{
                 </div>
             </div>
 
-            <div className="mt-3 h-2 w-full rounded-full bg-white/10 overflow-hidden">
-                <div
-                    className="h-full rounded-full bg-emerald-400/70"
-                    style={{ width: `${pct}%` }}
-                />
-            </div>
-
-            <div className="mt-3 flex flex-col gap-2">
+            <div className="mt-2 flex flex-col gap-1">
                 {items.map((it, idx) => (
-                    <div key={it.id} className="flex items-center justify-between gap-3 bg-black/20 ring-1 ring-white/10 rounded-lg px-3 py-2">
-                        <div className="flex items-center gap-3 min-w-0">
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ring-1 ${it.done ? 'bg-emerald-500/20 text-emerald-100 ring-emerald-400/25' : 'bg-white/5 text-white/70 ring-white/10'}`}>
+                    <div key={it.id} className="flex items-center justify-between gap-2 bg-black/25 ring-1 ring-white/10 rounded-xl px-2 py-1.5">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold ring-1 ${it.done ? 'bg-emerald-500/20 text-emerald-100 ring-emerald-400/25' : 'bg-white/5 text-white/70 ring-white/10'}`}>
                                 {idx + 1}
                             </div>
-                            <div className={`text-xs font-medium truncate ${it.done ? 'text-white/55 line-through' : 'text-white/85'}`}>
+                            <div className={`text-[11px] font-medium truncate ${it.done ? 'text-white/55 line-through' : 'text-white/85'}`}>
                                 {it.label}
                             </div>
                         </div>
 
-                        <div className={`shrink-0 px-2 py-1 rounded-full text-[11px] font-semibold ring-1 ${it.done ? 'bg-emerald-500/15 text-emerald-100 ring-emerald-400/30' : 'bg-white/5 text-white/60 ring-white/10'}`}>
+                        <div className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold ring-1 ${it.done ? 'bg-emerald-500/15 text-emerald-100 ring-emerald-400/30' : 'bg-white/5 text-white/60 ring-white/10'}`}>
                             {it.done ? 'Done' : 'To do'}
                         </div>
                     </div>
@@ -321,10 +311,10 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
         return (
             <div
                 ref={setNodeRef}
-                className={`p-3 rounded-xl text-center transition-all bg-black/35 ring-1 ring-white/10 ${isOver ? 'ring-2 ring-emerald-400/70 bg-emerald-500/10' : ''}`}
+                className={`p-2 rounded-xl text-center transition-all bg-black/35 ring-1 ring-white/10 ${isOver ? 'ring-2 ring-emerald-400/70 bg-emerald-500/10' : ''}`}
             >
-                <div className="text-white/90 font-semibold text-xs tracking-[0.18em] uppercase">{title}</div>
-                <div className="text-white/60 text-xs mt-1">{hint}</div>
+                <div className="text-white/90 font-semibold text-[11px] tracking-[0.18em] uppercase">{title}</div>
+                <div className="text-white/55 text-[11px] mt-0.5 hidden sm:block">{hint}</div>
             </div>
         );
     };
@@ -430,7 +420,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
         );
     };
 
-    const DomainSummaryPanel: React.FC<{ forPlayerId: string; layout?: 'grid' | 'vertical-list' }> = ({ forPlayerId, layout = 'grid' }) => {
+    const DomainSummaryPanel: React.FC<{ forPlayerId: string; layout?: 'grid' | 'vertical-list'; mode?: 'score' | 'count' }> = ({ forPlayerId, layout = 'grid', mode = 'score' }) => {
         const colors: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
         const score = scores?.[forPlayerId];
         const domainSummary = gameState.domainSummary?.[forPlayerId];
@@ -439,11 +429,20 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
             return <div className="text-xs text-white/55">No summary</div>;
         }
 
-        // Prefer score-by-family (can be negative). Fall back to domain counts.
+        // Prefer score-by-family (can be negative) unless explicitly asked for counts.
         const rows = colors.map((c) => {
-            const v = score?.byColor?.[c];
-            if (typeof v === 'number') return { color: c, value: v, kind: 'score' as const };
-            const count = domainSummary?.byColorCounts?.[c] ?? 0;
+            if (mode === 'score') {
+                const v = score?.byColor?.[c];
+                if (typeof v === 'number') return { color: c, value: v, kind: 'score' as const };
+            }
+            const countFromSummary = domainSummary?.byColorCounts?.[c];
+            if (typeof countFromSummary === 'number') return { color: c, value: countFromSummary, kind: 'count' as const };
+
+            // Fallback: compute from visible cards (avoid leaking hidden spy colors).
+            const p = gameState.players[forPlayerId];
+            const count = (p?.domain ?? [])
+                .filter((card) => !(card.isHidden || card.type === 'T') && card.color === c)
+                .reduce((sum, card) => sum + contribution(card), 0);
             return { color: c, value: count, kind: 'count' as const };
         });
 
@@ -512,8 +511,8 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
             : `w-full flex-col flex-nowrap items-center justify-start ${placement === 'left' ? 'pr-10' : 'pl-10'}`;
 
         const zoneMinHeight = placement === 'top'
-            ? (expanded ? 'min-h-[170px]' : 'min-h-[140px]')
-            : (expanded ? 'min-h-[320px]' : 'min-h-[220px]');
+            ? (expanded ? 'min-h-[130px]' : 'min-h-[105px]')
+            : (expanded ? 'min-h-[260px]' : 'min-h-[180px]');
 
         const showNameInZoneHeader = placement === 'top';
 
@@ -567,7 +566,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
 
                 return (
                     <div
-                        className={`rounded-2xl bg-gradient-to-b from-white/5 to-black/20 ${hoverRing} ${killRing} ${dim} ${glow} transition-all duration-150 p-2 flex items-center justify-center hover:-translate-y-[1px]`}
+                        className={`rounded-2xl bg-gradient-to-b from-white/5 to-black/20 ${hoverRing} ${killRing} ${dim} ${glow} transition-all duration-150 p-1.5 flex items-center justify-center hover:-translate-y-[1px]`}
                         onPointerEnter={(e) => {
                             if (isDragging) return;
                             cancelDomainHoverClose();
@@ -579,7 +578,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                         }}
                         onPointerLeave={() => scheduleDomainHoverClose()}
                     >
-                        <div style={{ transform: 'scale(0.9)', transformOrigin: 'center' }}>
+                        <div style={{ transform: 'scale(0.82)', transformOrigin: 'center' }}>
                             <Card card={rep} draggable={false} />
                         </div>
                     </div>
@@ -639,7 +638,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                         )}
                     </Zone>
 
-                    <div className="mt-2 flex items-center justify-center">
+                    <div className="mt-1 flex items-center justify-center">
                         <div className="px-2 py-1 rounded-full text-[11px] font-semibold ring-1 ring-white/15 bg-black/30 text-white/85">
                             {name}
                         </div>
@@ -677,9 +676,9 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
 
                     {!expanded && (
                         <div className="w-full flex flex-col gap-2">
-                            <DomainSummaryPanel forPlayerId={opponentId} layout={placement === 'top' ? 'grid' : 'vertical-list'} />
+                            <DomainSummaryPanel forPlayerId={opponentId} layout={placement === 'top' ? 'grid' : 'vertical-list'} mode={placement === 'top' ? 'count' : 'score'} />
                             {isTarget && (
-                                <div className="text-[11px] text-white/55">Drop cards here for your opponent play.</div>
+                                <div className="text-[11px] text-white/55">Drop your opponent-play card here.</div>
                             )}
                             {!isTarget && (
                                 <div className="text-[11px] text-white/45">You can play to any opponent.</div>
@@ -856,63 +855,11 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
         );
     };
 
-    const BanquetBreakdownPanel: React.FC = () => {
-        if (!banquet) return null;
-        const details = gameState.banquetDetails;
-        if (!details) return null;
-
-        const colors: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
-        const summarize = (cards: CardType[]) => {
-            const plus2 = cards.filter(c => c.type === 'X2').length;
-            const plus1 = cards.length - plus2;
-            return { plus1, plus2 };
-        };
-
-        const hiddenTop = details.hiddenTopCount ?? banquet.hiddenTopCount;
-        const hiddenBottom = details.hiddenBottomCount ?? banquet.hiddenBottomCount;
-
-        return (
-            <div className="mt-4 bg-black/25 ring-1 ring-white/10 rounded-xl p-3">
-                <div className="flex items-center justify-between gap-2">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/80">Banquet breakdown</div>
-                    <div className="text-[11px] text-white/60">(+1/−1/+2/−2 counts)</div>
-                </div>
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {colors.map((c) => {
-                        const top = details.byColor[c]?.top ?? [];
-                        const bottom = details.byColor[c]?.bottom ?? [];
-                        const up = summarize(top);
-                        const down = summarize(bottom);
-                        return (
-                            <div key={c} className="bg-black/30 ring-1 ring-white/10 rounded-lg px-2 py-2">
-                                <div className="text-[11px] font-bold" style={{ color: COLOR_HEX[c] }}>{COLOR_FULL_NAME[c]}</div>
-                                <div className="mt-1 grid grid-cols-4 gap-1 text-[11px]">
-                                    <div className="text-emerald-200">+1</div>
-                                    <div className="text-white/85 font-semibold">{up.plus1}</div>
-                                    <div className="text-emerald-200">+2</div>
-                                    <div className="text-white/85 font-semibold">{up.plus2}</div>
-
-                                    <div className="text-red-200">−1</div>
-                                    <div className="text-white/85 font-semibold">{down.plus1}</div>
-                                    <div className="text-red-200">−2</div>
-                                    <div className="text-white/85 font-semibold">{down.plus2}</div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-
-                {(hiddenTop > 0 || hiddenBottom > 0) && (
-                    <div className="mt-2 text-[11px] text-white/65">
-                        Hidden cards (unknown family): <span className="text-white/85 font-semibold">+{hiddenTop}</span> / <span className="text-white/85 font-semibold">−{hiddenBottom}</span>
-                    </div>
-                )}
-            </div>
-        );
-    };
+    const showObjectivesDock = Boolean(myObjectives);
+    const showHistoryDock = (gameState.history ?? []).length > 0;
 
     return (
-        <div className="w-full h-full flex flex-col items-center justify-between p-4 sm:p-6 relative overflow-auto">
+        <div className="w-full h-full flex flex-col items-center justify-between p-3 sm:p-4 relative overflow-auto">
             {/* Background */}
             <div className="absolute inset-0 z-0 pointer-events-none">
                 <div
@@ -925,6 +872,25 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
 
             <ScoreBubble />
             <TurnIndicator />
+
+            {showObjectivesDock && (
+                <div className="fixed bottom-3 left-3 z-50 flex flex-col gap-3 pointer-events-auto">
+                    <TurnActionsBubble
+                        isMyTurn={isMyTurn}
+                        turnPlays={gameState.turnPlays}
+                        hasPendingDecision={isKillDecisionMine}
+                    />
+                    <div className="w-[260px] max-w-[calc(100vw-1.5rem)] max-h-[260px] overflow-y-auto">
+                        <ObjectivesPanel />
+                    </div>
+                </div>
+            )}
+
+            {showHistoryDock && (
+                <div className="fixed bottom-3 right-3 z-50 pointer-events-auto w-[420px] max-w-[calc(100vw-1.5rem)] max-h-[320px] overflow-y-auto">
+                    <HistoryPanel />
+                </div>
+            )}
 
             {hasFinalRanking && showGameOverOverlay && finalRanking && (
                 <div className="fixed inset-0 z-[2147483646] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -977,7 +943,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
 
             {/* Tabletop layout */}
             <div className="relative z-10 w-full max-w-[1700px]">
-                <div className="grid grid-cols-1 gap-4 lg:gap-5 lg:grid-cols-[380px_minmax(520px,1fr)_380px] lg:grid-rows-[auto_minmax(620px,1fr)_auto]">
+                <div className="grid grid-cols-1 gap-3 lg:gap-4 lg:grid-cols-[320px_minmax(520px,1fr)_320px] lg:grid-rows-[auto_minmax(520px,1fr)_auto]">
                     {/* Top (Player 2) */}
                     <div className="hidden lg:block lg:col-start-2 lg:row-start-1">
                         {targetOpponentId && (
@@ -991,7 +957,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                     </div>
 
                     {/* Left (Player 4) */}
-                    <div className="hidden lg:flex lg:col-start-1 lg:row-start-2 flex-col gap-2 items-stretch justify-center pr-5 pl-2">
+                    <div className="hidden lg:flex lg:col-start-1 lg:row-start-2 flex-col gap-2 items-stretch justify-center pr-3 pl-1">
                         {playerCount === 4 && otherOpponentIds.length >= 2 && (
                             (() => {
                                 // Prefer putting the non-right-neighbor on the left.
@@ -1001,14 +967,14 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                                 return (
                                     <div className="h-full w-full flex items-center justify-between gap-3">
                                         {/* Hidden cards nearest the screen edge (fully visible) */}
-                                        <div className="shrink-0 pointer-events-none w-[230px] overflow-visible">
+                                        <div className="shrink-0 pointer-events-none w-[190px] overflow-visible">
                                             <div className="flex gap-2" style={{ transform: 'rotate(-90deg)', transformOrigin: 'left center' }}>
                                                 {hand.map((c) => <Card key={c.id} card={c} />)}
                                             </div>
                                         </div>
                                         {/* Domain reserved space (max width), sits between hidden cards and banquet */}
                                         <div className="flex-1 flex justify-end">
-                                            <div className="w-full max-w-[280px]">
+                                            <div className="w-full max-w-[240px]">
                                                 <OpponentDomainPanel opponentId={leftId} placement="left" isTarget={false} />
                                             </div>
                                         </div>
@@ -1019,7 +985,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                     </div>
 
                     {/* Right (Player 3) */}
-                    <div className="hidden lg:flex lg:col-start-3 lg:row-start-2 flex-col gap-2 items-stretch justify-center pl-5 pr-2">
+                    <div className="hidden lg:flex lg:col-start-3 lg:row-start-2 flex-col gap-2 items-stretch justify-center pl-3 pr-1">
                         {playerCount >= 3 && rightNeighborId && rightNeighborId !== targetOpponentId && (
                             (() => {
                                 const rightId = rightNeighborId;
@@ -1028,12 +994,12 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                                     <div className="h-full w-full flex items-center justify-between gap-3">
                                         {/* Domain reserved space (max width), sits between banquet and hidden cards */}
                                         <div className="flex-1 flex justify-start">
-                                            <div className="w-full max-w-[280px]">
+                                            <div className="w-full max-w-[240px]">
                                                 <OpponentDomainPanel opponentId={rightId} placement="right" isTarget={false} />
                                             </div>
                                         </div>
                                         {/* Hidden cards nearest the screen edge (fully visible) */}
-                                        <div className="shrink-0 pointer-events-none w-[230px] overflow-visible flex justify-end">
+                                        <div className="shrink-0 pointer-events-none w-[190px] overflow-visible flex justify-end">
                                             <div className="flex gap-2" style={{ transform: 'rotate(90deg)', transformOrigin: 'right center' }}>
                                                 {hand.map((c) => <Card key={c.id} card={c} />)}
                                             </div>
@@ -1048,12 +1014,12 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                     </div>
 
                     {/* Center (Banquet square + details) */}
-                    <div className="lg:col-start-2 lg:row-start-2 bg-black/30 ring-1 ring-white/10 rounded-2xl p-4 lg:p-5 self-stretch mx-auto w-full max-w-[720px] min-w-0">
+                    <div className="lg:col-start-2 lg:row-start-2 bg-black/30 ring-1 ring-white/10 rounded-2xl p-3 lg:p-4 self-stretch mx-auto w-full max-w-[680px] min-w-0">
 
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                             <div>
-                                <div className="text-white font-extrabold text-xl">The Banquet</div>
-                                <div className="text-white/60 text-sm">Drop a card into +1 (top) or −1 (under)</div>
+                                <div className="text-white font-extrabold text-lg">The Banquet</div>
+                                <div className="text-white/60 text-[12px]">Drop a card into +1 (top) or −1 (under)</div>
                             </div>
                             {banquet && (
                                 <div className="text-xs text-white/70 bg-black/25 ring-1 ring-white/10 rounded-lg px-3 py-2">
@@ -1062,13 +1028,13 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                             )}
                         </div>
 
-                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <BanquetZone id="banquet_top" title="+1 (Top)" hint="Counts as +1" />
                             <BanquetZone id="banquet_bottom" title="−1 (Under)" hint="Counts as −1" />
                         </div>
 
                         {banquet && (
-                            <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                            <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
                                 {(Object.keys(banquet.byColor) as Array<keyof typeof banquet.byColor>).map((color) => {
                                     const summary = banquet.byColor[color];
                                     const value = gameState.revealHidden ? summary.valueRevealed : summary.valueVisible;
@@ -1078,7 +1044,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                                     return (
                                         <div
                                             key={color}
-                                            className="relative bg-black/25 ring-1 ring-white/10 hover:ring-2 hover:ring-white/30 rounded-xl p-2 flex flex-col items-center transition"
+                                            className="relative bg-black/25 ring-1 ring-white/10 hover:ring-2 hover:ring-white/30 rounded-xl p-1.5 flex flex-col items-center transition"
                                             onMouseEnter={(e) => {
                                                 cancelHoverClose();
                                                 setHoverColor(color);
@@ -1087,10 +1053,10 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                                             onMouseLeave={() => scheduleHoverClose()}
                                         >
                                             <Card card={exemplar as any} draggable={false} />
-                                            <div className="mt-2 text-[11px] font-semibold" style={{ color: COLOR_HEX[color] }}>
+                                            <div className="mt-1 text-[11px] font-semibold" style={{ color: COLOR_HEX[color] }}>
                                                 {COLOR_FULL_NAME[color] ?? String(color)}
                                             </div>
-                                            <div className={`mt-2 px-2 py-1 rounded-full text-xs font-bold ring-1 ${bubbleClass}`}
+                                            <div className={`mt-1 px-2 py-1 rounded-full text-xs font-bold ring-1 ${bubbleClass}`}
                                                 style={{ borderColor: COLOR_HEX[color] }}>
                                                 {value >= 0 ? `+${value}` : `${value}`}
                                             </div>
@@ -1102,13 +1068,6 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                                 })}
                             </div>
                         )}
-
-                        <BanquetBreakdownPanel />
-
-                        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-                            <ObjectivesPanel />
-                            <HistoryPanel />
-                        </div>
                     </div>
 
                     {/* Bottom (Player 1: You) */}
@@ -1124,13 +1083,7 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                             onKill={(cardId) => onResolveKill?.({ cardId })}
                         />
 
-                        <TurnChecklistPanel
-                            isMyTurn={isMyTurn}
-                            turnPlays={gameState.turnPlays}
-                            hasPendingDecision={isKillDecisionMine}
-                        />
-
-                        <div className="flex justify-center flex-wrap gap-2 p-4 bg-black/45 rounded-2xl ring-1 ring-white/10 min-h-[170px]">
+                        <div className="flex justify-center flex-wrap gap-2 p-3 bg-black/45 rounded-2xl ring-1 ring-white/10 min-h-[140px]">
                             {myPlayer?.hand.map(c => (
                                 <Card key={c.id} card={c} draggable={isMyTurn} />
                             ))}
