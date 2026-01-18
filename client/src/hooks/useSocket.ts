@@ -76,7 +76,7 @@ export function useSocket() {
         };
     }, []);
 
-    const createGame = (options?: { playerName?: string; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
+    const createGame = (options?: { playerName?: string; partySize?: number; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
         socket.emit('create_game', options);
     };
 
@@ -91,8 +91,8 @@ export function useSocket() {
         setGameState(null);
     };
 
-    const playCard = (cardId: string, targetZone: PlayZone) => {
-        socket.emit('play_card', { cardId, targetZone });
+    const playCard = (cardId: string, targetZone: PlayZone, targetPlayerId?: string) => {
+        socket.emit('play_card', { cardId, targetZone, targetPlayerId });
     };
 
     const resolveKill = (data: { cardId?: string; hiddenSign?: 'top' | 'bottom' }) => {

@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useDroppable } from '@dnd-kit/core';
+import { useDndMonitor, useDroppable } from '@dnd-kit/core';
 import type { GameState, Card as CardType, CardColor, CardType as CardTypeCode, HistoryItem } from '@shared/types';
 import { Card } from './Card';
 
@@ -65,27 +65,31 @@ const cardDisplayName = (c: CardType) => {
 // Zone Component
 interface ZoneProps {
     id: string;
-    title?: string;
+    title?: React.ReactNode;
     nameBadge?: string;
     nameBadgeClassName?: string;
     cards: CardType[];
     className?: string;
+    minHeightClassName?: string;
+    droppableDisabled?: boolean;
     killableCardIds?: Set<string>;
     killEnabled?: boolean;
     onKill?: (cardId: string) => void;
+    children?: React.ReactNode;
 }
 
-const Zone: React.FC<ZoneProps> = ({ id, title, nameBadge, nameBadgeClassName, cards, className, killableCardIds, killEnabled, onKill }) => {
+const Zone: React.FC<ZoneProps> = ({ id, title, nameBadge, nameBadgeClassName, cards, className, minHeightClassName, droppableDisabled, killableCardIds, killEnabled, onKill, children }) => {
     const { setNodeRef, isOver } = useDroppable({
         id: id,
+        disabled: Boolean(droppableDisabled),
     });
 
     return (
         <div
             ref={setNodeRef}
             className={`
-        min-h-[160px] p-3 rounded-xl flex flex-wrap gap-2 justify-center items-center transition-colors
-        ${isOver ? 'bg-emerald-500/15 ring-2 ring-emerald-400/60' : 'bg-black/35 ring-1 ring-white/10'}
+                relative ${minHeightClassName ?? 'min-h-[160px]'} p-3 rounded-xl flex flex-wrap gap-2 justify-center items-center transition-colors
+        ${!droppableDisabled && isOver ? 'bg-emerald-500/15 ring-2 ring-emerald-400/60' : 'bg-black/35 ring-1 ring-white/10'}
         ${className}
       `}
         >
@@ -101,6 +105,9 @@ const Zone: React.FC<ZoneProps> = ({ id, title, nameBadge, nameBadgeClassName, c
                     )}
                 </div>
             )}
+
+            {children}
+
             {cards.map(card => (
                 <button
                     key={card.id}
@@ -132,20 +139,41 @@ interface BoardProps {
 export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, onResolveKill }) => {
     const myPlayer = gameState.players[playerId];
     const isMyTurn = gameState.turn === playerId;
-    // Opponent is the other key
-    const opponentId = Object.keys(gameState.players).find(id => id !== playerId);
-    const opponent = opponentId ? gameState.players[opponentId] : null;
-
     const myName = (myPlayer?.name ?? '').trim() || 'You';
-    const opponentName = (opponent?.name ?? '').trim() || 'Opponent';
 
-    const turnPlays = gameState.turnPlays;
+    const playerOrder = (gameState.playerOrder && gameState.playerOrder.length > 0)
+        ? gameState.playerOrder
+        : Object.keys(gameState.players);
+    const playerCount = playerOrder.length;
+    const myIndex = Math.max(0, playerOrder.indexOf(playerId));
+    const leftNeighborId = playerCount >= 2 ? playerOrder[(myIndex + 1) % playerCount] : undefined;
+    const rightNeighborId = playerCount >= 2 ? playerOrder[(myIndex - 1 + playerCount) % playerCount] : undefined;
+
+    // Game rules currently treat "opponent" as your left neighbor.
+    const targetOpponentId = leftNeighborId;
+
+    const otherOpponentIds = playerOrder.filter((id) => id !== playerId && id !== targetOpponentId);
+
     const banquet = gameState.banquet;
     const scores = gameState.scores;
-
-    const myScore = scores?.[playerId];
-    const oppScore = opponentId ? scores?.[opponentId] : undefined;
     const myObjectives = gameState.myObjectives;
+
+    const [expandedOpponents, setExpandedOpponents] = useState<Record<string, boolean>>({});
+    const setExclusiveExpandedOpponent = (id?: string) => {
+        if (!id) {
+            setExpandedOpponents({});
+            return;
+        }
+        setExpandedOpponents({ [id]: true });
+    };
+    const toggleOpponentExpanded = (id: string) => {
+        const isExpanded = Boolean(expandedOpponents[id]);
+        if (isExpanded) {
+            setExpandedOpponents({});
+        } else {
+            setExclusiveExpandedOpponent(id);
+        }
+    };
 
     const isKillDecisionMine = Boolean(pendingKill && pendingKill.type === 'kill' && pendingKill.affectedPlayerId === playerId);
     const killableSet = useMemo(() => new Set(pendingKill?.candidateCardIds ?? []), [pendingKill]);
@@ -153,9 +181,44 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
     const killTargetsMe = Boolean(isKillDecisionMine && pendingKill?.area === 'self_domain');
     const killTargetsOpponent = Boolean(isKillDecisionMine && pendingKill?.area === 'opponent_domain');
 
+    // Multiplayer: when killing an opponent domain, server can specify which opponent is being targeted.
+    const killTargetOpponentId = killTargetsOpponent
+        ? (pendingKill?.targetPlayerId ?? targetOpponentId)
+        : undefined;
+
+    // If the current player must select a card from an opponent domain, auto-expand that opponent.
+    React.useEffect(() => {
+        if (!killTargetsOpponent) return;
+        if (!killTargetOpponentId) return;
+        setExclusiveExpandedOpponent(killTargetOpponentId);
+    }, [killTargetsOpponent, killTargetOpponentId]);
+
     const hoveredCloseTimer = useRef<number | null>(null);
     const [hoverColor, setHoverColor] = useState<CardColor | null>(null);
     const [hoverRect, setHoverRect] = useState<DOMRect | null>(null);
+
+    const hoveredDomainCloseTimer = useRef<number | null>(null);
+    const [hoverDomain, setHoverDomain] = useState<null | { opponentId: string; category: CardColor | 'HIDDEN'; rect: DOMRect }>(null);
+    const [isDragging, setIsDragging] = useState(false);
+
+    useDndMonitor({
+        onDragStart: () => {
+            setIsDragging(true);
+            setHoverColor(null);
+            setHoverRect(null);
+            setHoverDomain(null);
+            if (hoveredCloseTimer.current) window.clearTimeout(hoveredCloseTimer.current);
+            hoveredCloseTimer.current = null;
+            if (hoveredDomainCloseTimer.current) window.clearTimeout(hoveredDomainCloseTimer.current);
+            hoveredDomainCloseTimer.current = null;
+        },
+        onDragCancel: () => {
+            setIsDragging(false);
+        },
+        onDragEnd: () => {
+            setIsDragging(false);
+        }
+    });
 
     const scheduleHoverClose = () => {
         if (hoveredCloseTimer.current) window.clearTimeout(hoveredCloseTimer.current);
@@ -167,6 +230,17 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
     const cancelHoverClose = () => {
         if (hoveredCloseTimer.current) window.clearTimeout(hoveredCloseTimer.current);
         hoveredCloseTimer.current = null;
+    };
+
+    const scheduleDomainHoverClose = () => {
+        if (hoveredDomainCloseTimer.current) window.clearTimeout(hoveredDomainCloseTimer.current);
+        hoveredDomainCloseTimer.current = window.setTimeout(() => {
+            setHoverDomain(null);
+        }, 450);
+    };
+    const cancelDomainHoverClose = () => {
+        if (hoveredDomainCloseTimer.current) window.clearTimeout(hoveredDomainCloseTimer.current);
+        hoveredDomainCloseTimer.current = null;
     };
 
     const contribution = (c: CardType) => (c.type === 'X2' ? 2 : 1);
@@ -184,26 +258,353 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
         );
     };
 
-    const ScorePanel: React.FC<{ label: string; score?: typeof myScore; }> = ({ label, score }) => {
-        if (!score) return null;
-        const colors: Array<keyof typeof score.byColor> = ['DG', 'G', 'R', 'Y', 'B', 'W'];
+    const ScoreBubble: React.FC = () => {
+        if (!scores) return null;
+        const colors: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
+
+        const [open, setOpen] = useState(false);
+        const orderedIds = playerOrder.filter((id) => scores[id]);
+
         return (
-            <div className="bg-black/35 ring-1 ring-white/10 rounded-xl px-3 py-2">
-                <div className="flex items-center justify-between">
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/80">{label}</div>
-                    <div className="text-white font-bold">{score.total}</div>
+            <div className="fixed top-4 right-4 z-50">
+                <div
+                    className="bg-black/55 ring-1 ring-white/15 rounded-full px-3 py-2 backdrop-blur-sm cursor-default"
+                    onMouseEnter={() => setOpen(true)}
+                    onMouseLeave={() => setOpen(false)}
+                >
+                    <div className="flex items-center gap-3">
+                        {orderedIds.map((id) => {
+                            const p = gameState.players[id];
+                            const name = (p?.name ?? '').trim() || 'Player';
+                            const total = scores[id]?.total ?? 0;
+                            const isTurn = gameState.turn === id;
+                            const isMe = id === playerId;
+                            return (
+                                <div key={id} className={`flex items-center gap-2 ${isTurn ? 'text-emerald-200' : 'text-white/90'}`}>
+                                    <span className={`text-xs font-bold ${isMe ? 'text-amber-200' : ''}`}>{name}</span>
+                                    <span className="text-xs font-extrabold">{total}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                    {colors.map((c) => (
-                        <div key={c} className="flex items-center justify-between bg-black/25 rounded-lg px-2 py-1 ring-1 ring-white/10">
-                            <span className="text-[11px] font-semibold" style={{ color: COLOR_HEX[c] }}>{COLOR_FULL_NAME[c] ?? c}</span>
-                            <span className="text-xs text-white/90">{score.byColor[c]}</span>
+
+                {open && (
+                    <div className="mt-2 w-[360px] max-w-[90vw] bg-black/90 ring-1 ring-white/20 rounded-xl p-3 shadow-2xl">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-white/70">Scores</div>
+                        <div className="mt-2 flex flex-col gap-2">
+                            {orderedIds.map((id) => {
+                                const p = gameState.players[id];
+                                const name = (p?.name ?? '').trim() || 'Player';
+                                const s = scores[id];
+                                if (!s) return null;
+                                return (
+                                    <div key={id} className="bg-black/40 ring-1 ring-white/10 rounded-lg px-2 py-2">
+                                        <div className="flex items-center justify-between">
+                                            <div className={`text-sm font-bold ${id === playerId ? 'text-amber-200' : 'text-white/90'}`}>{name}</div>
+                                            <div className="text-white font-extrabold">{s.total}</div>
+                                        </div>
+                                        <div className="mt-2 grid grid-cols-3 gap-1">
+                                            {colors.map((c) => (
+                                                <div key={c} className="flex items-center justify-between bg-black/25 rounded px-2 py-1 ring-1 ring-white/10">
+                                                    <span className="text-[10px] font-semibold" style={{ color: COLOR_HEX[c] }}>{COLOR_FULL_NAME[c]}</span>
+                                                    <span className="text-[10px] text-white/85 font-semibold">{s.byColor[c]}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="mt-2 text-[11px] text-white/70">
+                                            Objectives: <span className="text-white font-semibold">{s.objectivePoints}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const TurnIndicator: React.FC = () => {
+        const turnId = gameState.turn;
+        const name = (gameState.players[turnId]?.name ?? '').trim() || 'Player';
+        const isYou = turnId === playerId;
+        return (
+            <div className="fixed top-4 left-4 z-50">
+                <div className="bg-black/55 ring-1 ring-white/15 rounded-full px-3 py-2 backdrop-blur-sm">
+                    <div className="text-xs text-white/80">
+                        Turn: <span className={`font-extrabold ${isYou ? 'text-amber-200' : 'text-white'}`}>{isYou ? `${name} (you)` : name}</span>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const DomainSummaryPanel: React.FC<{ forPlayerId: string; layout?: 'grid' | 'vertical-list' }> = ({ forPlayerId, layout = 'grid' }) => {
+        const colors: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
+        const score = scores?.[forPlayerId];
+        const domainSummary = gameState.domainSummary?.[forPlayerId];
+
+        if (!score && !domainSummary) {
+            return <div className="text-xs text-white/55">No summary</div>;
+        }
+
+        // Prefer score-by-family (can be negative). Fall back to domain counts.
+        const rows = colors.map((c) => {
+            const v = score?.byColor?.[c];
+            if (typeof v === 'number') return { color: c, value: v, kind: 'score' as const };
+            const count = domainSummary?.byColorCounts?.[c] ?? 0;
+            return { color: c, value: count, kind: 'count' as const };
+        });
+
+        if (layout === 'vertical-list') {
+            const nonZero = rows.filter((r) => r.value !== 0);
+            const list = nonZero.length > 0 ? nonZero : rows;
+            return (
+                <div className="w-full">
+                    <div className="flex flex-col gap-1">
+                        {list.map((r) => (
+                            <div key={r.color} className="flex items-center justify-between">
+                                <span className="text-[11px] font-semibold" style={{ color: COLOR_HEX[r.color] }}>{COLOR_FULL_NAME[r.color]}</span>
+                                <span className={`text-[11px] font-extrabold tabular-nums ${r.value < 0 ? 'text-red-200' : 'text-emerald-200'}`}>{r.value}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        return (
+            <div className="w-full">
+                <div className="grid grid-cols-3 gap-1">
+                    {rows.map((r) => (
+                        <div key={r.color} className="flex items-center justify-between bg-black/25 rounded px-2 py-1 ring-1 ring-white/10">
+                            <span className="text-[10px] font-semibold" style={{ color: COLOR_HEX[r.color] }}>{COLOR_FULL_NAME[r.color]}</span>
+                            <span className="text-[10px] text-white/85 font-semibold tabular-nums">{r.value}</span>
                         </div>
                     ))}
                 </div>
-                <div className="mt-2 text-[11px] text-white/60">
-                    Deck counts: {colors.map(c => `${COLOR_FULL_NAME[c] ?? c}:${score.deckCounts[c]}`).join(' · ')}
+                {domainSummary && (
+                    <div className="mt-2 text-[11px] text-white/65">Spies: <span className="text-white/85 font-semibold">{domainSummary.spiesCount}</span></div>
+                )}
+            </div>
+        );
+    };
+
+    const OpponentDomainPanel: React.FC<{
+        opponentId: string;
+        placement: 'top' | 'left' | 'right';
+        isTarget: boolean;
+    }> = ({ opponentId, placement, isTarget }) => {
+        const op = gameState.players[opponentId];
+        if (!op) return null;
+        const name = (op.name ?? '').trim() || 'Opponent';
+        const expanded = Boolean(expandedOpponents[opponentId]);
+
+        const isKillTarget = Boolean(killTargetsOpponent && killTargetOpponentId === opponentId);
+
+        const arrow = (() => {
+            // Buttons must always point toward the center (inner edge).
+            if (placement === 'top') return expanded ? '▲' : '▼';
+            if (placement === 'left') return expanded ? '◀' : '▶';
+            return expanded ? '▶' : '◀';
+        })();
+
+        const title = <span>{isTarget ? 'Opponent Domain' : 'Player Domain'}</span>;
+
+        const zoneId = `opponent:${opponentId}`;
+        const droppableDisabled = false;
+
+        // Side panels: stack vertically and avoid wrapping.
+        // Add inner-edge padding so the expand button never overlaps text/cards.
+        const zoneClassName = placement === 'top'
+            ? 'pb-10'
+            : `w-full flex-col flex-nowrap items-center justify-start ${placement === 'left' ? 'pr-10' : 'pl-10'}`;
+
+        const zoneMinHeight = placement === 'top'
+            ? (expanded ? 'min-h-[170px]' : 'min-h-[140px]')
+            : (expanded ? 'min-h-[320px]' : 'min-h-[220px]');
+
+        const showNameInZoneHeader = placement === 'top';
+
+        // Player 3/4 (left/right) domains are aggregated + inspectable (Banquet-like).
+        if (placement !== 'top') {
+            const summary = gameState.domainSummary?.[opponentId];
+            const colorOrder: CardColor[] = ['Y', 'R', 'G', 'DG', 'B', 'W'];
+
+            const getCountForColor = (color: CardColor) => {
+                const v = summary?.byColorCounts?.[color];
+                if (typeof v === 'number') return v;
+                // Fallback: compute from visible cards (avoid leaking hidden colors).
+                return op.domain
+                    .filter((c) => !(c.isHidden || c.type === 'T') && c.color === color)
+                    .reduce((sum, c) => sum + contribution(c), 0);
+            };
+
+            const getCardsForCategory = (category: CardColor | 'HIDDEN') => {
+                if (category === 'HIDDEN') {
+                    return op.domain.filter((c) => c.isHidden || c.type === 'T');
+                }
+                return op.domain.filter((c) => !(c.isHidden || c.type === 'T') && c.color === category);
+            };
+
+            const CategoryCard: React.FC<{ category: CardColor | 'HIDDEN' }> = ({ category }) => {
+                const cards = getCardsForCategory(category);
+                const exemplar: CardType = category === 'HIDDEN'
+                    ? { id: `ex-${opponentId}-H`, color: 'DG', type: 'T', ownerId: opponentId, image: 'back.jpeg', isHidden: true }
+                    : ({ id: `ex-${opponentId}-${category}`, color: category, type: 'N', ownerId: opponentId, image: `${category}N.png`, isHidden: false } as any);
+                const rep = cards[0] ?? exemplar;
+
+                const categoryHasKillable = isKillTarget
+                    ? cards.some((c) => killableSet.has(c.id) && c.type !== 'S')
+                    : false;
+
+                const isHovered = Boolean(
+                    hoverDomain &&
+                    hoverDomain.opponentId === opponentId &&
+                    hoverDomain.category === category
+                );
+
+                const hoverRing = isHovered ? 'ring-2 ring-emerald-300/80' : 'ring-1 ring-white/12';
+                const killRing = isKillTarget
+                    ? (categoryHasKillable ? 'ring-2 ring-red-400/80 hover:ring-red-300/90' : 'ring-1 ring-white/8')
+                    : 'hover:ring-2 hover:ring-white/25';
+                const dim = isKillTarget && !categoryHasKillable ? 'opacity-45' : 'opacity-100';
+
+                const glow = isKillTarget
+                    ? (categoryHasKillable ? 'shadow-[0_0_24px_rgba(248,113,113,0.25)]' : '')
+                    : (isHovered ? 'shadow-[0_0_24px_rgba(52,211,153,0.18)]' : '');
+
+                return (
+                    <div
+                        className={`rounded-2xl bg-gradient-to-b from-white/5 to-black/20 ${hoverRing} ${killRing} ${dim} ${glow} transition-all duration-150 p-2 flex items-center justify-center hover:-translate-y-[1px]`}
+                        onPointerEnter={(e) => {
+                            if (isDragging) return;
+                            cancelDomainHoverClose();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            // Defer state update slightly to reduce jitter when rapidly moving across cards.
+                            window.requestAnimationFrame(() => {
+                                setHoverDomain({ opponentId, category, rect });
+                            });
+                        }}
+                        onPointerLeave={() => scheduleDomainHoverClose()}
+                    >
+                        <div style={{ transform: 'scale(0.9)', transformOrigin: 'center' }}>
+                            <Card card={rep} draggable={false} />
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="h-full flex flex-col justify-between">
+                    <Zone
+                        id={zoneId}
+                        title={title}
+                        minHeightClassName={zoneMinHeight}
+                        droppableDisabled={droppableDisabled}
+                        className={zoneClassName}
+                        cards={[]}
+                        killEnabled={Boolean(isKillTarget)}
+                        killableCardIds={isKillTarget ? killableSet : undefined}
+                        onKill={(cardId) => onResolveKill?.({ cardId })}
+                    >
+                        {/* Inner-edge expand button */}
+                        <button
+                            type="button"
+                            onClick={() => toggleOpponentExpanded(opponentId)}
+                            className={`absolute z-10 text-[12px] font-extrabold w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 ring-1 ring-white/15 flex items-center justify-center
+                                ${placement === 'left' ? 'right-2 top-1/2 -translate-y-1/2' : ''}
+                                ${placement === 'right' ? 'left-2 top-1/2 -translate-y-1/2' : ''}
+                            `}
+                            aria-label={expanded ? 'Collapse domain' : 'Expand domain'}
+                        >
+                            {arrow}
+                        </button>
+
+                        {!expanded && (
+                            <div className="w-full">
+                                <div className="text-[11px] uppercase tracking-[0.18em] text-white/65">Card counts</div>
+                                <div className="mt-2 grid grid-cols-1 gap-1">
+                                    {colorOrder.map((c) => (
+                                        <div key={c} className="flex items-center justify-between bg-black/25 rounded px-2 py-1 ring-1 ring-white/10">
+                                            <span className="text-[11px] font-semibold" style={{ color: COLOR_HEX[c] }}>{COLOR_FULL_NAME[c]}</span>
+                                            <span className="text-[11px] text-white/85 font-extrabold tabular-nums">{getCountForColor(c)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {expanded && (
+                            <div className="w-full flex flex-col gap-2">
+                                <CategoryCard category="Y" />
+                                <CategoryCard category="R" />
+                                <CategoryCard category="G" />
+                                <CategoryCard category="DG" />
+                                <CategoryCard category="B" />
+                                <CategoryCard category="W" />
+                                <CategoryCard category="HIDDEN" />
+                            </div>
+                        )}
+                    </Zone>
+
+                    <div className="mt-2 flex items-center justify-center">
+                        <div className="px-2 py-1 rounded-full text-[11px] font-semibold ring-1 ring-white/15 bg-black/30 text-white/85">
+                            {name}
+                        </div>
+                    </div>
                 </div>
+            );
+        }
+
+        return (
+            <div className={`h-full flex flex-col ${placement === 'top' ? '' : 'justify-between'}`}>
+                <Zone
+                    id={zoneId}
+                    title={title}
+                    nameBadge={showNameInZoneHeader ? name : undefined}
+                    nameBadgeClassName={showNameInZoneHeader ? 'text-red-100 bg-red-500/15 ring-red-400/30' : undefined}
+                    minHeightClassName={zoneMinHeight}
+                    droppableDisabled={droppableDisabled}
+                    className={zoneClassName}
+                    cards={expanded ? (op.domain || []) : []}
+                    killEnabled={Boolean(isKillTarget)}
+                    killableCardIds={isKillTarget ? killableSet : undefined}
+                    onKill={(cardId) => onResolveKill?.({ cardId })}
+                >
+                    {/* Inner-edge expand button */}
+                    <button
+                        type="button"
+                        onClick={() => toggleOpponentExpanded(opponentId)}
+                        className={`absolute z-10 text-[12px] font-extrabold w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 ring-1 ring-white/15 flex items-center justify-center
+                            bottom-2 left-1/2 -translate-x-1/2
+                        `}
+                        aria-label={expanded ? 'Collapse domain' : 'Expand domain'}
+                    >
+                        {arrow}
+                    </button>
+
+                    {!expanded && (
+                        <div className="w-full flex flex-col gap-2">
+                            <DomainSummaryPanel forPlayerId={opponentId} layout={placement === 'top' ? 'grid' : 'vertical-list'} />
+                            {isTarget && (
+                                <div className="text-[11px] text-white/55">Drop cards here for your opponent play.</div>
+                            )}
+                            {!isTarget && (
+                                <div className="text-[11px] text-white/45">You can play to any opponent.</div>
+                            )}
+                        </div>
+                    )}
+                </Zone>
+
+                {!showNameInZoneHeader && (
+                    <div className="mt-2 flex items-center justify-center">
+                        <div className="px-2 py-1 rounded-full text-[11px] font-semibold ring-1 ring-white/15 bg-black/30 text-white/85">
+                            {name}
+                        </div>
+                    </div>
+                )}
             </div>
         );
     };
@@ -432,49 +833,113 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                 <div className="absolute inset-0 opacity-[0.08] bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.9)_1px,transparent_0)] [background-size:22px_22px]" />
             </div>
 
-            {/* Opponent Area */}
-            <div className="relative z-10 w-full max-w-6xl flex flex-col gap-3">
-                {/* Opponent Hand (Visible as backs) */}
-                <div className="flex justify-center gap-2 min-h-[108px]">
-                    {opponent?.hand.map(c => <Card key={c.id} card={c} />)}
+            <ScoreBubble />
+            <TurnIndicator />
+
+            {Array.isArray(gameState.finalRanking) && gameState.finalRanking.length > 0 && (
+                <div className="fixed inset-0 z-[2147483646] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-xl bg-black/90 ring-1 ring-white/20 rounded-2xl p-4 shadow-2xl">
+                        <div className="text-white font-extrabold text-xl">Game over</div>
+                        {gameState.winner && (
+                            <div className="mt-1 text-white/80">Winner: <span className="text-amber-200 font-bold">{(gameState.players[gameState.winner]?.name ?? '').trim() || 'Player'}</span></div>
+                        )}
+                        <div className="mt-3">
+                            <div className="text-[11px] uppercase tracking-[0.18em] text-white/70">Final ranking</div>
+                            <div className="mt-2 flex flex-col gap-2">
+                                {gameState.finalRanking.map((r, idx) => (
+                                    <div key={r.playerId} className="flex items-center justify-between bg-black/40 ring-1 ring-white/10 rounded-lg px-3 py-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <div className="text-white/60 text-xs w-5">#{idx + 1}</div>
+                                            <div className={`text-sm font-bold truncate ${r.playerId === playerId ? 'text-amber-200' : 'text-white/90'}`}>{r.name}</div>
+                                        </div>
+                                        <div className="text-white font-extrabold">{r.total}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="mt-3 text-xs text-white/50">Leave the room to start a new game.</div>
+                    </div>
                 </div>
+            )}
 
-                {/* Opponent Domain */}
-                <Zone
-                    id="opponent"
-                    title="Opponent Domain"
-                    nameBadge={opponentName}
-                    nameBadgeClassName="text-red-100 bg-red-500/15 ring-red-400/30"
-                    cards={opponent?.domain || []}
-                    killEnabled={Boolean(killTargetsOpponent)}
-                    killableCardIds={killTargetsOpponent ? killableSet : undefined}
-                    onKill={(cardId) => onResolveKill?.({ cardId })}
-                />
-            </div>
-
-            {/* Middle Area: Queen Zone */}
-            <div className="relative z-10 w-full max-w-6xl my-4">
-                {turnPlays && (
-                    <div className="mb-2 flex justify-center gap-3 text-xs text-white/85">
-                        <span className={turnPlays.banquet ? 'text-emerald-300' : 'text-white/60'}>Banquet</span>
-                        <span className={turnPlays.self ? 'text-emerald-300' : 'text-white/60'}>Self</span>
-                        <span className={turnPlays.opponent ? 'text-emerald-300' : 'text-white/60'}>Opponent</span>
-                        <span className="text-white/50">{isMyTurn ? '(your 3 plays)' : "(opponent's 3 plays)"}</span>
-                    </div>
-                )}
-
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
-                    <div className="lg:col-span-1 flex flex-col gap-3">
-                        <ScorePanel label="You" score={myScore} />
-                        <ScorePanel label="Opponent" score={oppScore} />
-                        <ObjectivesPanel />
-                        <HistoryPanel />
+            {/* Tabletop layout */}
+            <div className="relative z-10 w-full max-w-[1700px]">
+                <div className="grid grid-cols-1 gap-4 lg:gap-5 lg:grid-cols-[380px_minmax(520px,1fr)_380px] lg:grid-rows-[auto_minmax(620px,1fr)_auto]">
+                    {/* Top (Player 2) */}
+                    <div className="hidden lg:block lg:col-start-2 lg:row-start-1">
+                        {targetOpponentId && (
+                            <div className="flex flex-col gap-2">
+                                <div className="flex justify-center gap-2 min-h-[84px]">
+                                    {(gameState.players[targetOpponentId]?.hand ?? []).map((c) => <Card key={c.id} card={c} />)}
+                                </div>
+                                <OpponentDomainPanel opponentId={targetOpponentId} placement="top" isTarget={true} />
+                            </div>
+                        )}
                     </div>
 
-                    <div className="lg:col-span-2 bg-black/30 ring-1 ring-white/10 rounded-2xl p-4 self-start">
+                    {/* Left (Player 4) */}
+                    <div className="hidden lg:flex lg:col-start-1 lg:row-start-2 flex-col gap-2 items-stretch justify-center pr-5 pl-2">
+                        {playerCount === 4 && otherOpponentIds.length >= 2 && (
+                            (() => {
+                                // Prefer putting the non-right-neighbor on the left.
+                                const leftId = otherOpponentIds.find((id) => id !== rightNeighborId) ?? otherOpponentIds[0];
+                                if (!leftId) return null;
+                                const hand = gameState.players[leftId]?.hand ?? [];
+                                return (
+                                    <div className="h-full w-full flex items-center justify-between gap-3">
+                                        {/* Hidden cards nearest the screen edge (fully visible) */}
+                                        <div className="shrink-0 pointer-events-none w-[230px] overflow-visible">
+                                            <div className="flex gap-2" style={{ transform: 'rotate(-90deg)', transformOrigin: 'left center' }}>
+                                                {hand.map((c) => <Card key={c.id} card={c} />)}
+                                            </div>
+                                        </div>
+                                        {/* Domain reserved space (max width), sits between hidden cards and banquet */}
+                                        <div className="flex-1 flex justify-end">
+                                            <div className="w-full max-w-[280px]">
+                                                <OpponentDomainPanel opponentId={leftId} placement="left" isTarget={false} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()
+                        )}
+                    </div>
+
+                    {/* Right (Player 3) */}
+                    <div className="hidden lg:flex lg:col-start-3 lg:row-start-2 flex-col gap-2 items-stretch justify-center pl-5 pr-2">
+                        {playerCount >= 3 && rightNeighborId && rightNeighborId !== targetOpponentId && (
+                            (() => {
+                                const rightId = rightNeighborId;
+                                const hand = gameState.players[rightId]?.hand ?? [];
+                                return (
+                                    <div className="h-full w-full flex items-center justify-between gap-3">
+                                        {/* Domain reserved space (max width), sits between banquet and hidden cards */}
+                                        <div className="flex-1 flex justify-start">
+                                            <div className="w-full max-w-[280px]">
+                                                <OpponentDomainPanel opponentId={rightId} placement="right" isTarget={false} />
+                                            </div>
+                                        </div>
+                                        {/* Hidden cards nearest the screen edge (fully visible) */}
+                                        <div className="shrink-0 pointer-events-none w-[230px] overflow-visible flex justify-end">
+                                            <div className="flex gap-2" style={{ transform: 'rotate(90deg)', transformOrigin: 'right center' }}>
+                                                {hand.map((c) => <Card key={c.id} card={c} />)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()
+                        )}
+                        {playerCount === 3 && otherOpponentIds[0] && otherOpponentIds[0] !== targetOpponentId && otherOpponentIds[0] !== rightNeighborId && (
+                            <OpponentDomainPanel opponentId={otherOpponentIds[0]} placement="right" isTarget={false} />
+                        )}
+                    </div>
+
+                    {/* Center (Banquet square + details) */}
+                    <div className="lg:col-start-2 lg:row-start-2 bg-black/30 ring-1 ring-white/10 rounded-2xl p-4 lg:p-5 self-stretch mx-auto w-full max-w-[720px] min-w-0">
+
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                             <div>
-                                <div className="text-white font-bold text-lg">The Banquet</div>
+                                <div className="text-white font-extrabold text-xl">The Banquet</div>
                                 <div className="text-white/60 text-sm">Drop a card into +1 (top) or −1 (under)</div>
                             </div>
                             {banquet && (
@@ -484,13 +949,13 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                             )}
                         </div>
 
-                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <BanquetZone id="banquet_top" title="+1 (Top)" hint="Counts as +1" />
                             <BanquetZone id="banquet_bottom" title="−1 (Under)" hint="Counts as −1" />
                         </div>
 
                         {banquet && (
-                            <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                            <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
                                 {(Object.keys(banquet.byColor) as Array<keyof typeof banquet.byColor>).map((color) => {
                                     const summary = banquet.byColor[color];
                                     const value = gameState.revealHidden ? summary.valueRevealed : summary.valueVisible;
@@ -526,34 +991,37 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
                         )}
 
                         <BanquetBreakdownPanel />
+
+                        <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <ObjectivesPanel />
+                            <HistoryPanel />
+                        </div>
+                    </div>
+
+                    {/* Bottom (Player 1: You) */}
+                    <div className="lg:col-start-2 lg:row-start-3 flex flex-col gap-3">
+                        <Zone
+                            id="self"
+                            title="My Domain"
+                            nameBadge={myName}
+                            nameBadgeClassName="text-emerald-100 bg-emerald-500/15 ring-emerald-400/30"
+                            cards={myPlayer?.domain || []}
+                            killEnabled={Boolean(killTargetsMe)}
+                            killableCardIds={killTargetsMe ? killableSet : undefined}
+                            onKill={(cardId) => onResolveKill?.({ cardId })}
+                        />
+
+                        <div className="flex justify-center flex-wrap gap-2 p-4 bg-black/45 rounded-2xl ring-1 ring-white/10 min-h-[170px]">
+                            {myPlayer?.hand.map(c => (
+                                <Card key={c.id} card={c} draggable={isMyTurn} />
+                            ))}
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* Player Area */}
-            <div className="relative z-10 w-full max-w-6xl flex flex-col gap-3">
-                {/* My Domain */}
-                <Zone
-                    id="self"
-                    title="My Domain"
-                    nameBadge={myName}
-                    nameBadgeClassName="text-emerald-100 bg-emerald-500/15 ring-emerald-400/30"
-                    cards={myPlayer?.domain || []}
-                    killEnabled={Boolean(killTargetsMe)}
-                    killableCardIds={killTargetsMe ? killableSet : undefined}
-                    onKill={(cardId) => onResolveKill?.({ cardId })}
-                />
-
-                {/* My Hand */}
-                <div className="flex justify-center flex-wrap gap-2 mt-4 p-4 bg-black/45 rounded-2xl ring-1 ring-white/10 min-h-[170px]">
-                    {myPlayer?.hand.map(c => (
-                        <Card key={c.id} card={c} draggable={isMyTurn} />
-                    ))}
-                </div>
-            </div>
-
             {/* Fixed high-priority hover panel (rendered at Board root to avoid z-index stacking issues) */}
-            {banquet && hoverColor && hoverRect && (
+            {banquet && !isDragging && hoverColor && hoverRect && (
                 (() => {
                     const details = gameState.banquetDetails?.byColor?.[hoverColor];
                     const top = details?.top ?? [];
@@ -665,6 +1133,110 @@ export const Board: React.FC<BoardProps> = ({ gameState, playerId, pendingKill, 
 
                             <div className="mt-2 text-[11px] text-white/60">
                                 Hidden cards reveal only position counts: +{hiddenTop} / −{hiddenBottom}
+                            </div>
+                        </div>
+                    );
+                })()
+            )}
+
+            {/* Side domain inspect panel (Player 3/4) */}
+            {!isDragging && hoverDomain && (
+                (() => {
+                    const op = gameState.players[hoverDomain.opponentId];
+                    if (!op) return null;
+                    const opName = (op.name ?? '').trim() || 'Player';
+
+                    const categoryLabel = hoverDomain.category === 'HIDDEN'
+                        ? 'Hidden'
+                        : (COLOR_FULL_NAME[hoverDomain.category] ?? hoverDomain.category);
+
+                    const cards = hoverDomain.category === 'HIDDEN'
+                        ? op.domain.filter((c) => c.isHidden || c.type === 'T')
+                        : op.domain.filter((c) => !(c.isHidden || c.type === 'T') && c.color === hoverDomain.category);
+
+                    const isKillTarget = Boolean(
+                        isKillDecisionMine &&
+                        pendingKill?.area === 'opponent_domain' &&
+                        (pendingKill?.targetPlayerId ?? targetOpponentId) === hoverDomain.opponentId
+                    );
+
+                    const width = 420;
+                    const padding = 12;
+                    const viewportW = typeof window !== 'undefined' ? window.innerWidth : 1400;
+                    const viewportH = typeof window !== 'undefined' ? window.innerHeight : 900;
+                    const preferRight = hoverDomain.rect.left < viewportW / 2;
+                    const unclampedLeft = preferRight ? (hoverDomain.rect.right + 10) : (hoverDomain.rect.left - width - 10);
+                    const left = Math.min(Math.max(unclampedLeft, padding), Math.max(padding, viewportW - width - padding));
+                    const top = Math.min(Math.max(hoverDomain.rect.top, padding), Math.max(padding, viewportH - 420 - padding));
+
+                    const group = {
+                        N: cards.filter((c) => c.type === 'N'),
+                        X2: cards.filter((c) => c.type === 'X2'),
+                        S: cards.filter((c) => c.type === 'S'),
+                        K: cards.filter((c) => c.type === 'K'),
+                        T: cards.filter((c) => c.type === 'T'),
+                    };
+
+                    const Section: React.FC<{ title: string; list: CardType[] }> = ({ title, list }) => {
+                        if (list.length === 0) return null;
+                        return (
+                            <div>
+                                <div className="text-[11px] uppercase tracking-[0.18em] text-white/60">{title}</div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {list.map((c) => {
+                                        const isKillable = isKillTarget && killableSet.has(c.id) && c.type !== 'S';
+                                        const dimmed = isKillTarget && !isKillable;
+                                        return (
+                                            <button
+                                                key={c.id}
+                                                type="button"
+                                                disabled={!isKillable}
+                                                onClick={() => {
+                                                    if (isKillable) {
+                                                        onResolveKill?.({ cardId: c.id });
+                                                        // Optional: retract after selection to reduce clutter.
+                                                        setExpandedOpponents({});
+                                                    }
+                                                }}
+                                                className={
+                                                    isKillable
+                                                        ? 'relative rounded-xl ring-2 ring-red-400/90 shadow-[0_0_1.0rem_rgba(248,113,113,0.45)]'
+                                                        : `relative ${dimmed ? 'opacity-50' : 'opacity-95'}`
+                                                }
+                                            >
+                                                <Card card={c} draggable={false} />
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    };
+
+                    return (
+                        <div
+                            className="fixed z-[60] pointer-events-auto"
+                            style={{ left, top, width }}
+                            onPointerEnter={() => cancelDomainHoverClose()}
+                            onPointerLeave={() => scheduleDomainHoverClose()}
+                        >
+                            <div className="bg-black/92 ring-1 ring-white/20 rounded-2xl p-3 shadow-2xl backdrop-blur-sm animate-[fadeIn_120ms_ease-out]">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="text-sm font-extrabold text-white/90">
+                                        {opName} — {categoryLabel}
+                                    </div>
+                                    {isKillTarget && (
+                                        <div className="text-[11px] text-red-200/90">Select a card to kill</div>
+                                    )}
+                                </div>
+
+                                <div className="mt-3 flex flex-col gap-3 max-h-[360px] overflow-auto pr-1">
+                                    <Section title="Normal" list={group.N} />
+                                    <Section title="×2" list={group.X2} />
+                                    <Section title="Shield" list={group.S} />
+                                    <Section title="Killer" list={group.K} />
+                                    <Section title="Espion" list={group.T} />
+                                </div>
                             </div>
                         </div>
                     );

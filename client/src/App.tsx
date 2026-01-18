@@ -1,4 +1,14 @@
-import { DndContext, type DragEndEvent } from '@dnd-kit/core';
+import {
+  DndContext,
+  type DragEndEvent,
+  type CollisionDetection,
+  MeasuringStrategy,
+  PointerSensor,
+  pointerWithin,
+  rectIntersection,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 import { useMemo, useState } from 'react';
 import type { CardColor, CardType } from '@shared/types';
 import { useSocket } from './hooks/useSocket';
@@ -7,7 +17,7 @@ import { Board } from './components/Board';
 type DropZone = 'banquet_top' | 'banquet_bottom' | 'self' | 'opponent';
 
 const DEFAULT_ENABLED_COLORS: Record<CardColor, boolean> = { DG: true, G: true, R: true, Y: true, B: true, W: true };
-const DEFAULT_PER_COLOR_TYPE_COUNTS: Record<CardType, number> = { N: 7, X2: 2, S: 2, K: 2, T: 2 };
+const DEFAULT_PER_COLOR_TYPE_COUNTS: Record<CardType, number> = { N: 4, X2: 2, S: 2, K: 2, T: 2 };
 
 const COLOR_FULL_NAME: Record<CardColor, string> = {
   DG: 'Dark Green',
@@ -30,6 +40,7 @@ function App() {
   const { isConnected, gameState, error, createGame, joinGame, leaveGame, playCard, resolveKill, cancelKill, socketId, hasJoined, gameId } = useSocket();
   const [joinCode, setJoinCode] = useState('');
   const [playerName, setPlayerName] = useState('');
+  const [partySize, setPartySize] = useState(2);
   const [deckMultiplier, setDeckMultiplier] = useState(1);
   const [advancedDeck, setAdvancedDeck] = useState(false);
   const [enabledColors, setEnabledColors] = useState<Record<CardColor, boolean>>(DEFAULT_ENABLED_COLORS);
@@ -47,19 +58,39 @@ function App() {
     };
   }, [isMyTurn, gameState?.turnPlays?.banquet, gameState?.turnPlays?.self, gameState?.turnPlays?.opponent]);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  );
+
+  const collisionDetection: CollisionDetection = (args) => {
+    // Prefer pointer-based detection for transformed/rotated layouts; fall back to rect intersection.
+    const pointer = pointerWithin(args);
+    return pointer.length > 0 ? pointer : rectIntersection(args);
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
 
     if (over && active.data.current) {
-      // Zone IDs: 'banquet_top', 'banquet_bottom', 'self', 'opponent'
-      const targetZone = over.id as DropZone;
+      const overId = String(over.id);
+      let targetZone: DropZone | null = null;
+      let targetPlayerId: string | undefined;
+
+      if (overId.startsWith('opponent:')) {
+        targetZone = 'opponent';
+        targetPlayerId = overId.slice('opponent:'.length);
+      } else if (overId === 'banquet_top' || overId === 'banquet_bottom' || overId === 'self' || overId === 'opponent') {
+        targetZone = overId as DropZone;
+      }
+
+      if (!targetZone) return;
       const cardId = active.id as string;
 
       // Client-side guardrails (server still validates).
       if (!canPlayZone[targetZone]) return;
 
-      console.log(`Dragging ${cardId} to ${targetZone}`);
-      playCard(cardId, targetZone);
+      console.log(`Dragging ${cardId} to ${targetZone}${targetPlayerId ? `:${targetPlayerId}` : ''}`);
+      playCard(cardId, targetZone, targetPlayerId);
     }
   };
 
@@ -82,7 +113,7 @@ function App() {
   }
 
   if (!hasJoined) {
-    const baseDeckSize = 6 * (7 + 2 + 2 + 2 + 2); // 6 colors * sum(DISTRIBUTION)
+    const baseDeckSize = 6 * (4 + 2 + 2 + 2 + 2); // 6 colors * sum(DISTRIBUTION)
     const enabledColorCount = Object.values(enabledColors).filter(Boolean).length;
     const perColorSum = perColorTypeCounts.N + perColorTypeCounts.X2 + perColorTypeCounts.S + perColorTypeCounts.K + perColorTypeCounts.T;
     const deckSize = advancedDeck ? (enabledColorCount * perColorSum) : (baseDeckSize * deckMultiplier);
@@ -106,6 +137,22 @@ function App() {
               placeholder="Your name"
               className="mt-2 w-full px-3 py-2 rounded bg-black/40 border border-white/20 text-white outline-none"
               maxLength={20}
+            />
+
+            <div className="mt-3 flex items-center justify-between">
+              <div className="text-xs uppercase tracking-[0.18em] text-white/70">Party size</div>
+              <div className="text-xs text-white/80">
+                {partySize} players
+              </div>
+            </div>
+            <input
+              type="range"
+              min={2}
+              max={4}
+              step={1}
+              value={partySize}
+              onChange={(e) => setPartySize(Number(e.target.value))}
+              className="mt-2 w-full"
             />
 
             <div className="mt-3 flex items-center justify-between">
@@ -196,6 +243,7 @@ function App() {
           <button
             onClick={() => createGame({
               playerName,
+              partySize,
               deckMultiplier,
               deckOptions: advancedDeck ? { enabledColors, perColorTypeCounts } : undefined,
             })}
@@ -228,16 +276,37 @@ function App() {
     );
   }
 
-  if (!gameState) {
+  if (!gameState || !gameState.started) {
+    const players = gameState?.players ? Object.values(gameState.players) : [];
+    const maxPlayers = gameState?.maxPlayers ?? 2;
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-gray-900 text-white flex-col gap-4">
         <h1 className="text-3xl font-bold text-yellow-500">Courtisans</h1>
-        <div className="text-white/70">Waiting for opponent...</div>
+        <div className="text-white/70">Waiting for players...</div>
         {gameId && (
           <div className="bg-black/40 border border-white/20 rounded px-4 py-2">
             Game Code: <span className="font-bold tracking-widest">{gameId}</span>
           </div>
         )}
+
+        <div className="bg-black/30 border border-white/15 rounded-lg px-4 py-3 min-w-[320px]">
+          <div className="text-xs uppercase tracking-[0.18em] text-white/70">Lobby</div>
+          <div className="mt-2 text-white/80 text-sm">
+            Players: <span className="font-semibold text-white">{players.length}</span> / <span className="font-semibold text-white">{maxPlayers}</span>
+          </div>
+          <div className="mt-2 flex flex-col gap-1">
+            {players.length === 0 && <div className="text-xs text-white/50">No players yet</div>}
+            {players.map((p) => (
+              <div key={p.id} className="text-sm text-white/85 bg-black/25 ring-1 ring-white/10 rounded px-2 py-1">
+                {(p.name ?? '').trim() || 'Player'}
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-xs text-white/50">
+            Game starts automatically when the party is full.
+          </div>
+        </div>
+
         <button
           onClick={leaveGame}
           className="px-5 py-2 bg-white/10 hover:bg-white/20 rounded border border-white/20"
@@ -249,7 +318,12 @@ function App() {
   }
 
   return (
-    <DndContext onDragEnd={handleDragEnd}>
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+      onDragEnd={handleDragEnd}
+    >
       <div className="h-screen w-screen bg-gray-900 text-white font-sans">
         {error && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded shadow-lg z-50">
@@ -257,8 +331,8 @@ function App() {
           </div>
         )}
 
-        {/* Game code + leave */}
-        <div className="absolute top-4 left-4 z-50 bg-black/50 px-4 py-2 rounded border border-white/20 flex items-center gap-3">
+        {/* Game code + deck + leave (kept, but placed under Board HUD) */}
+        <div className="fixed top-16 left-4 z-40 bg-black/50 px-4 py-2 rounded border border-white/20 flex items-center gap-3">
           {gameId && (
             <span className="text-white/80 text-sm">
               Code: <span className="font-bold tracking-widest text-white">{gameId}</span>
@@ -275,15 +349,6 @@ function App() {
           >
             Leave
           </button>
-        </div>
-
-        {/* Turn Indicator */}
-        <div className="absolute top-4 right-4 z-50 bg-black/50 px-4 py-2 rounded border border-white/20">
-          {isMyTurn ? (
-            <span className="text-green-400 font-bold">YOUR TURN</span>
-          ) : (
-            <span className="text-gray-400">Opponent's Turn</span>
-          )}
         </div>
 
         {pendingKill && (

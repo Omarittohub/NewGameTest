@@ -54,7 +54,7 @@ export function setupSocketHandlers(io: Server) {
     io.on('connection', (socket: Socket) => {
         console.log('User connected:', socket.id);
 
-        socket.on('create_game', async (data?: { playerName?: string; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
+        socket.on('create_game', async (data?: { playerName?: string; partySize?: number; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
             // Leave any prior game
             const prevGameId = getSocketGameId(socket);
             if (prevGameId) {
@@ -66,9 +66,10 @@ export function setupSocketHandlers(io: Server) {
             let gameId = generateGameId();
             while (rooms.has(gameId)) gameId = generateGameId();
 
+            const partySize = Number(data?.partySize ?? 2);
             const deckMultiplier = Number(data?.deckMultiplier ?? 1);
             const deckOptions = data?.deckOptions as any;
-            const game = new Game({ deckMultiplier, deckOptions });
+            const game = new Game({ maxPlayers: partySize, deckMultiplier, deckOptions });
             rooms.set(gameId, { id: gameId, game });
 
             // Join creator as player 1
@@ -121,7 +122,7 @@ export function setupSocketHandlers(io: Server) {
             setSocketGameId(socket, gameId);
             socket.emit('joined_game', { gameId });
 
-            if (room.game.getPlayerCount() === 2) {
+            if (room.game.getPlayerCount() === room.game.getMaxPlayers()) {
                 room.game.startGame();
             }
 
@@ -143,14 +144,14 @@ export function setupSocketHandlers(io: Server) {
             cleanupRoomIfEmpty(io, gameId);
         });
 
-        socket.on('play_card', (data: { cardId: string, targetZone: 'banquet_top' | 'banquet_bottom' | 'self' | 'opponent' }) => {
+        socket.on('play_card', (data: { cardId: string; targetZone: 'banquet_top' | 'banquet_bottom' | 'self' | 'opponent'; targetPlayerId?: string }) => {
             try {
                 const gameId = getSocketGameId(socket);
                 if (!gameId) throw new Error('Join a game first');
                 const room = rooms.get(gameId);
                 if (!room) throw new Error('Game not found');
 
-                room.game.playCard(socket.id, data.cardId, data.targetZone);
+                room.game.playCard(socket.id, data.cardId, data.targetZone, data.targetPlayerId);
                 broadcastRoomState(io, gameId);
             } catch (e: any) {
                 socket.emit('game_error', e.message);

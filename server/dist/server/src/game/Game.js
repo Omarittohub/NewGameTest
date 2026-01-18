@@ -21,15 +21,16 @@ const TYPE_FULL_NAME = {
 };
 // Distribution (Heuristic based on standard gameplay feels)
 const DISTRIBUTION = {
-    'N': 7,
+    'N': 4,
     'X2': 2,
     'S': 2,
     'K': 2,
     'T': 2
 };
+const OBJECTIVE_POINTS_EACH = 3;
 class Game {
     constructor(options) {
-        var _a;
+        var _a, _b;
         this.deck = [];
         this.players = {};
         this.objectives = {};
@@ -46,10 +47,21 @@ class Game {
         this.history = [];
         // Track current turn moves
         this.moves = {};
-        const mult = Number((_a = options === null || options === void 0 ? void 0 : options.deckMultiplier) !== null && _a !== void 0 ? _a : 1);
+        const mp = Number((_a = options === null || options === void 0 ? void 0 : options.maxPlayers) !== null && _a !== void 0 ? _a : 2);
+        this.maxPlayers = Number.isFinite(mp) ? Math.max(2, Math.min(4, Math.floor(mp))) : 2;
+        const mult = Number((_b = options === null || options === void 0 ? void 0 : options.deckMultiplier) !== null && _b !== void 0 ? _b : 1);
         this.deckMultiplier = Number.isFinite(mult) ? Math.max(1, Math.min(5, Math.floor(mult))) : 1;
         this.deckOptions = options === null || options === void 0 ? void 0 : options.deckOptions;
         this.initializeDeck();
+    }
+    getMaxPlayers() {
+        return this.maxPlayers;
+    }
+    leftNeighborId(playerId) {
+        const idx = this.playerIds.indexOf(playerId);
+        if (idx === -1 || this.playerIds.length < 2)
+            return undefined;
+        return this.playerIds[(idx + 1) % this.playerIds.length];
     }
     displayName(playerId) {
         var _a, _b;
@@ -66,11 +78,11 @@ class Game {
         if (this.history.length > 80)
             this.history.splice(0, this.history.length - 80);
     }
-    zoneLabel(playedBy, targetZone) {
+    zoneLabel(playedBy, targetZone, targetPlayerId) {
         if (targetZone === 'self')
             return 'their domain';
         if (targetZone === 'opponent') {
-            const opponentId = this.playerIds.find(id => id !== playedBy);
+            const opponentId = targetPlayerId !== null && targetPlayerId !== void 0 ? targetPlayerId : this.leftNeighborId(playedBy);
             const oppName = opponentId ? this.displayName(opponentId) : 'opponent';
             return `${oppName}'s domain`;
         }
@@ -157,7 +169,9 @@ class Game {
     addPlayer(id, name) {
         if (this.players[id])
             return true;
-        if (this.playerIds.length >= 2)
+        if (this.started)
+            return false;
+        if (this.playerIds.length >= this.maxPlayers)
             return false;
         this.playerIds.push(id);
         this.players[id] = {
@@ -177,6 +191,8 @@ class Game {
     }
     startGame() {
         if (this.playerIds.length < 2)
+            return;
+        if (this.started)
             return;
         this.initializeDeck();
         this.banquetTop = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
@@ -349,7 +365,9 @@ class Game {
             }
         }
     }
-    playCard(playerId, cardId, targetZone) {
+    playCard(playerId, cardId, targetZone, targetPlayerId) {
+        if (!this.started)
+            throw new Error('Game has not started yet');
         if (playerId !== this.currentTurn)
             throw new Error("Not your turn");
         // Killer resolution is optional and must never block gameplay.
@@ -397,7 +415,11 @@ class Game {
             currentMoves.self = card.id;
         }
         else if (targetZone === 'opponent') {
-            const opponentId = this.playerIds.find(id => id !== playerId);
+            const opponentId = (targetPlayerId && this.players[targetPlayerId] && targetPlayerId !== playerId)
+                ? targetPlayerId
+                : this.leftNeighborId(playerId);
+            if (!opponentId)
+                throw new Error('No opponent available');
             // Handle Trader logic: "Must play 3 cards...". "Trader... in opponent's domain".
             // We just put it there.
             this.players[opponentId].domain.push(card);
@@ -405,12 +427,14 @@ class Game {
         }
         // History message (Spy cards stay generic mid-game)
         const actor = this.displayName(playerId);
-        const where = this.zoneLabel(playerId, targetZone);
+        const where = this.zoneLabel(playerId, targetZone, targetPlayerId);
         const destination = targetZone === 'self' ? 'my_domain'
             : targetZone === 'opponent' ? 'opponent_domain'
                 : targetZone === 'banquet_top' ? 'banquet_grace'
                     : 'banquet_disgrace';
-        const opponentId = targetZone === 'opponent' ? this.playerIds.find(id => id !== playerId) : undefined;
+        const opponentId = targetZone === 'opponent'
+            ? ((targetPlayerId && this.players[targetPlayerId] && targetPlayerId !== playerId) ? targetPlayerId : this.leftNeighborId(playerId))
+            : undefined;
         const targetName = opponentId ? this.displayName(opponentId) : undefined;
         if (card.type === 'T' && !this.revealHidden) {
             this.pushHistory({
@@ -448,7 +472,7 @@ class Game {
         }
         // Killer requires an explicit target selection.
         if (card.type === 'K') {
-            this.queueKill(playerId, targetZone);
+            this.queueKill(playerId, targetZone, opponentId);
             // Killer does not block continuing the turn; it can be resolved or canceled.
         }
         // Check if turn complete
@@ -458,8 +482,8 @@ class Game {
                 this.endTurn();
         }
     }
-    queueKill(playedBy, targetZone) {
-        var _a, _b;
+    queueKill(playedBy, targetZone, opponentTargetPlayerId) {
+        var _a, _b, _c;
         // The player who played the killer always chooses whether to kill (or cancel).
         const affectedPlayerId = playedBy;
         const area = targetZone === 'opponent' ? 'opponent_domain'
@@ -482,17 +506,17 @@ class Game {
         else {
             const targetPlayerId = area === 'self_domain'
                 ? affectedPlayerId
-                : this.playerIds.find(id => id !== affectedPlayerId);
-            const domain = (_b = (_a = this.players[targetPlayerId]) === null || _a === void 0 ? void 0 : _a.domain) !== null && _b !== void 0 ? _b : [];
+                : ((_a = opponentTargetPlayerId !== null && opponentTargetPlayerId !== void 0 ? opponentTargetPlayerId : this.leftNeighborId(affectedPlayerId)) !== null && _a !== void 0 ? _a : this.playerIds.find(id => id !== affectedPlayerId));
+            const domain = (_c = (_b = this.players[targetPlayerId]) === null || _b === void 0 ? void 0 : _b.domain) !== null && _c !== void 0 ? _c : [];
             domain.forEach(c => {
                 if (c.type !== 'S')
                     candidateCardIds.push(c.id);
             });
         }
-        this.pendingKill = { affectedPlayerId, area, candidateCardIds, hiddenTopCount, hiddenBottomCount };
+        this.pendingKill = { affectedPlayerId, area, targetPlayerId: area === 'opponent_domain' ? opponentTargetPlayerId : undefined, candidateCardIds, hiddenTopCount, hiddenBottomCount };
     }
     resolveKill(actingPlayerId, data) {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e, _f;
         if (!this.pendingKill)
             throw new Error('No pending kill');
         const pendingKill = this.pendingKill;
@@ -556,8 +580,8 @@ class Game {
         else {
             const targetPlayerId = area === 'self_domain'
                 ? pendingKill.affectedPlayerId
-                : this.playerIds.find(id => id !== pendingKill.affectedPlayerId);
-            const domain = (_c = (_b = this.players[targetPlayerId]) === null || _b === void 0 ? void 0 : _b.domain) !== null && _c !== void 0 ? _c : [];
+                : ((_c = (_b = pendingKill.targetPlayerId) !== null && _b !== void 0 ? _b : this.leftNeighborId(pendingKill.affectedPlayerId)) !== null && _c !== void 0 ? _c : this.playerIds.find(id => id !== pendingKill.affectedPlayerId));
+            const domain = (_e = (_d = this.players[targetPlayerId]) === null || _d === void 0 ? void 0 : _d.domain) !== null && _e !== void 0 ? _e : [];
             const idx = domain.findIndex(c => c.id === cardId);
             if (idx === -1)
                 throw new Error('Target not found');
@@ -590,7 +614,7 @@ class Game {
         }
         this.pendingKill = undefined;
         // If the active player already completed their 3 plays, end the turn now.
-        const turnMoves = (_d = this.moves[this.currentTurn]) !== null && _d !== void 0 ? _d : {};
+        const turnMoves = (_f = this.moves[this.currentTurn]) !== null && _f !== void 0 ? _f : {};
         if (turnMoves.banquet && turnMoves.self && turnMoves.opponent) {
             this.endTurn();
         }
@@ -738,7 +762,7 @@ class Game {
         };
     }
     computeScores(banquetSummary) {
-        var _a, _b;
+        var _a, _b, _c, _d, _e, _f;
         const scores = {};
         const colors = ['DG', 'G', 'R', 'Y', 'B', 'W'];
         for (const pid of this.playerIds) {
@@ -758,21 +782,64 @@ class Game {
                 byColor[color] = score;
                 total += score;
             }
-            scores[pid] = { total, byColor, deckCounts };
+            const objectivePoints = this.revealHidden
+                ? ((((_d = (_c = this.objectiveResults) === null || _c === void 0 ? void 0 : _c[pid]) === null || _d === void 0 ? void 0 : _d.gracefulMet) ? OBJECTIVE_POINTS_EACH : 0)
+                    + (((_f = (_e = this.objectiveResults) === null || _e === void 0 ? void 0 : _e[pid]) === null || _f === void 0 ? void 0 : _f.disgracefulMet) ? OBJECTIVE_POINTS_EACH : 0))
+                : 0;
+            total += objectivePoints;
+            scores[pid] = { total, byColor, deckCounts, objectivePoints };
         }
         return scores;
     }
+    computeDomainSummary() {
+        var _a, _b;
+        const summary = {};
+        const zero = { DG: 0, G: 0, R: 0, Y: 0, B: 0, W: 0 };
+        const weight = (c) => (c.type === 'X2' ? 2 : 1);
+        for (const pid of this.playerIds) {
+            const byColorCounts = Object.assign({}, zero);
+            let spiesCount = 0;
+            const domain = (_b = (_a = this.players[pid]) === null || _a === void 0 ? void 0 : _a.domain) !== null && _b !== void 0 ? _b : [];
+            for (const c of domain) {
+                if (c.type === 'T') {
+                    spiesCount += 1;
+                    continue; // keep spies out of color buckets to avoid leaking hidden spy colors
+                }
+                byColorCounts[c.color] += weight(c);
+            }
+            summary[pid] = { byColorCounts, spiesCount };
+        }
+        return summary;
+    }
     getState(forPlayerId) {
-        var _a, _b, _c, _d, _e;
+        var _a, _b, _c, _d, _e, _f;
         // Clone state to avoid mutation and handle masking
         const turnMoves = this.currentTurn ? (_a = this.moves[this.currentTurn]) !== null && _a !== void 0 ? _a : {} : {};
         const banquet = this.computeBanquetSummary();
         const banquetDetails = this.computeBanquetDetails();
         const scores = this.computeScores(banquet);
+        const domainSummary = this.computeDomainSummary();
+        const playerOrder = [...this.playerIds];
+        const finalRanking = this.revealHidden
+            ? playerOrder
+                .map((pid) => {
+                var _a, _b;
+                return ({
+                    playerId: pid,
+                    name: this.displayName(pid),
+                    total: (_b = (_a = scores === null || scores === void 0 ? void 0 : scores[pid]) === null || _a === void 0 ? void 0 : _a.total) !== null && _b !== void 0 ? _b : 0,
+                });
+            })
+                .sort((a, b) => b.total - a.total)
+            : undefined;
+        const winner = (_b = finalRanking === null || finalRanking === void 0 ? void 0 : finalRanking[0]) === null || _b === void 0 ? void 0 : _b.playerId;
         const state = {
             players: {},
             queens: { 'all': [] },
             turn: this.currentTurn,
+            started: this.started,
+            maxPlayers: this.maxPlayers,
+            playerOrder,
             turnPlays: {
                 banquet: Boolean(turnMoves.banquet),
                 self: Boolean(turnMoves.self),
@@ -780,6 +847,7 @@ class Game {
             },
             banquet,
             banquetDetails,
+            domainSummary,
             scores,
             revealHidden: this.revealHidden,
             deckRemaining: this.deck.length,
@@ -788,12 +856,15 @@ class Game {
                     type: 'kill',
                     affectedPlayerId: this.pendingKill.affectedPlayerId,
                     area: this.pendingKill.area,
+                    targetPlayerId: this.pendingKill.targetPlayerId,
                     candidateCardIds: [...this.pendingKill.candidateCardIds],
                     hiddenTopCount: this.pendingKill.hiddenTopCount,
                     hiddenBottomCount: this.pendingKill.hiddenBottomCount,
                 }
                 : undefined,
             history: [...this.history],
+            winner,
+            finalRanking,
         };
         this.playerIds.forEach(pid => {
             const p = this.players[pid];
@@ -835,8 +906,8 @@ class Game {
             state.myObjectives = {
                 graceful: myObj.graceful,
                 disgraceful: myObj.disgraceful,
-                gracefulMet: this.revealHidden ? (_c = (_b = this.objectiveResults) === null || _b === void 0 ? void 0 : _b[forPlayerId]) === null || _c === void 0 ? void 0 : _c.gracefulMet : undefined,
-                disgracefulMet: this.revealHidden ? (_e = (_d = this.objectiveResults) === null || _d === void 0 ? void 0 : _d[forPlayerId]) === null || _e === void 0 ? void 0 : _e.disgracefulMet : undefined,
+                gracefulMet: this.revealHidden ? (_d = (_c = this.objectiveResults) === null || _c === void 0 ? void 0 : _c[forPlayerId]) === null || _d === void 0 ? void 0 : _d.gracefulMet : undefined,
+                disgracefulMet: this.revealHidden ? (_f = (_e = this.objectiveResults) === null || _e === void 0 ? void 0 : _e[forPlayerId]) === null || _f === void 0 ? void 0 : _f.disgracefulMet : undefined,
             };
         }
         return state;

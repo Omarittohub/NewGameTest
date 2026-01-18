@@ -23,14 +23,17 @@ const TYPE_FULL_NAME: Record<CardType, string> = {
 
 // Distribution (Heuristic based on standard gameplay feels)
 const DISTRIBUTION: Record<CardType, number> = {
-    'N': 7,
+    'N': 4,
     'X2': 2,
     'S': 2,
     'K': 2,
     'T': 2
 };
 
+const OBJECTIVE_POINTS_EACH = 3;
+
 export class Game {
+    private maxPlayers: number;
     private deckMultiplier: number;
     private deckOptions?: {
         enabledColors?: Partial<Record<CardColor, boolean>>;
@@ -58,6 +61,7 @@ export class Game {
     private pendingKill?: {
         affectedPlayerId: string;
         area: 'self_domain' | 'opponent_domain' | 'banquet';
+        targetPlayerId?: string;
         candidateCardIds: string[];
         hiddenTopCount?: number;
         hiddenBottomCount?: number;
@@ -69,11 +73,23 @@ export class Game {
     // Track current turn moves
     private moves: Record<string, { banquet?: string; self?: string; opponent?: string }> = {};
 
-    constructor(options?: { deckMultiplier?: number; deckOptions?: { enabledColors?: Partial<Record<CardColor, boolean>>; perColorTypeCounts?: Partial<Record<CardType, number>> } }) {
+    constructor(options?: { maxPlayers?: number; deckMultiplier?: number; deckOptions?: { enabledColors?: Partial<Record<CardColor, boolean>>; perColorTypeCounts?: Partial<Record<CardType, number>> } }) {
+        const mp = Number(options?.maxPlayers ?? 2);
+        this.maxPlayers = Number.isFinite(mp) ? Math.max(2, Math.min(4, Math.floor(mp))) : 2;
         const mult = Number(options?.deckMultiplier ?? 1);
         this.deckMultiplier = Number.isFinite(mult) ? Math.max(1, Math.min(5, Math.floor(mult))) : 1;
         this.deckOptions = options?.deckOptions;
         this.initializeDeck();
+    }
+
+    public getMaxPlayers() {
+        return this.maxPlayers;
+    }
+
+    private leftNeighborId(playerId: string): string | undefined {
+        const idx = this.playerIds.indexOf(playerId);
+        if (idx === -1 || this.playerIds.length < 2) return undefined;
+        return this.playerIds[(idx + 1) % this.playerIds.length];
     }
 
     private displayName(playerId: string): string {
@@ -90,10 +106,10 @@ export class Game {
         if (this.history.length > 80) this.history.splice(0, this.history.length - 80);
     }
 
-    private zoneLabel(playedBy: string, targetZone: PlayZone): string {
+    private zoneLabel(playedBy: string, targetZone: PlayZone, targetPlayerId?: string): string {
         if (targetZone === 'self') return 'their domain';
         if (targetZone === 'opponent') {
-            const opponentId = this.playerIds.find(id => id !== playedBy);
+            const opponentId = targetPlayerId ?? this.leftNeighborId(playedBy);
             const oppName = opponentId ? this.displayName(opponentId) : 'opponent';
             return `${oppName}'s domain`;
         }
@@ -186,7 +202,8 @@ export class Game {
 
     public addPlayer(id: string, name?: string) {
         if (this.players[id]) return true;
-        if (this.playerIds.length >= 2) return false;
+        if (this.started) return false;
+        if (this.playerIds.length >= this.maxPlayers) return false;
         this.playerIds.push(id);
         this.players[id] = {
             id,
@@ -206,6 +223,7 @@ export class Game {
 
     public startGame() {
         if (this.playerIds.length < 2) return;
+        if (this.started) return;
         this.initializeDeck();
         this.banquetTop = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
         this.banquetBottom = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
@@ -390,7 +408,8 @@ export class Game {
         }
     }
 
-    public playCard(playerId: string, cardId: string, targetZone: PlayZone) {
+    public playCard(playerId: string, cardId: string, targetZone: PlayZone, targetPlayerId?: string) {
+        if (!this.started) throw new Error('Game has not started yet');
         if (playerId !== this.currentTurn) throw new Error("Not your turn");
         // Killer resolution is optional and must never block gameplay.
 
@@ -433,7 +452,10 @@ export class Game {
             player.domain.push(card);
             currentMoves.self = card.id;
         } else if (targetZone === 'opponent') {
-            const opponentId = this.playerIds.find(id => id !== playerId)!;
+            const opponentId = (targetPlayerId && this.players[targetPlayerId] && targetPlayerId !== playerId)
+                ? targetPlayerId
+                : this.leftNeighborId(playerId);
+            if (!opponentId) throw new Error('No opponent available');
             // Handle Trader logic: "Must play 3 cards...". "Trader... in opponent's domain".
             // We just put it there.
             this.players[opponentId].domain.push(card);
@@ -442,13 +464,15 @@ export class Game {
 
         // History message (Spy cards stay generic mid-game)
         const actor = this.displayName(playerId);
-        const where = this.zoneLabel(playerId, targetZone);
+        const where = this.zoneLabel(playerId, targetZone, targetPlayerId);
         const destination: NonNullable<GameState['history']>[number]['destination'] =
             targetZone === 'self' ? 'my_domain'
                 : targetZone === 'opponent' ? 'opponent_domain'
                     : targetZone === 'banquet_top' ? 'banquet_grace'
                         : 'banquet_disgrace';
-        const opponentId = targetZone === 'opponent' ? this.playerIds.find(id => id !== playerId) : undefined;
+        const opponentId = targetZone === 'opponent'
+            ? ((targetPlayerId && this.players[targetPlayerId] && targetPlayerId !== playerId) ? targetPlayerId : this.leftNeighborId(playerId))
+            : undefined;
         const targetName = opponentId ? this.displayName(opponentId) : undefined;
 
         if (card.type === 'T' && !this.revealHidden) {
@@ -486,7 +510,7 @@ export class Game {
 
         // Killer requires an explicit target selection.
         if (card.type === 'K') {
-            this.queueKill(playerId, targetZone);
+            this.queueKill(playerId, targetZone, opponentId);
             // Killer does not block continuing the turn; it can be resolved or canceled.
         }
 
@@ -497,7 +521,7 @@ export class Game {
         }
     }
 
-    private queueKill(playedBy: string, targetZone: PlayZone) {
+    private queueKill(playedBy: string, targetZone: PlayZone, opponentTargetPlayerId?: string) {
         // The player who played the killer always chooses whether to kill (or cancel).
         const affectedPlayerId = playedBy;
         const area: 'self_domain' | 'opponent_domain' | 'banquet' =
@@ -519,7 +543,7 @@ export class Game {
         } else {
             const targetPlayerId = area === 'self_domain'
                 ? affectedPlayerId
-                : this.playerIds.find(id => id !== affectedPlayerId)!;
+                : (opponentTargetPlayerId ?? this.leftNeighborId(affectedPlayerId) ?? this.playerIds.find(id => id !== affectedPlayerId)!);
 
             const domain = this.players[targetPlayerId]?.domain ?? [];
             domain.forEach(c => {
@@ -527,7 +551,7 @@ export class Game {
             });
         }
 
-        this.pendingKill = { affectedPlayerId, area, candidateCardIds, hiddenTopCount, hiddenBottomCount };
+        this.pendingKill = { affectedPlayerId, area, targetPlayerId: area === 'opponent_domain' ? opponentTargetPlayerId : undefined, candidateCardIds, hiddenTopCount, hiddenBottomCount };
     }
 
     public resolveKill(actingPlayerId: string, data: { cardId?: string; hiddenSign?: 'top' | 'bottom' }) {
@@ -582,7 +606,7 @@ export class Game {
         } else {
             const targetPlayerId = area === 'self_domain'
                 ? pendingKill.affectedPlayerId
-                : this.playerIds.find(id => id !== pendingKill.affectedPlayerId)!;
+                : (pendingKill.targetPlayerId ?? this.leftNeighborId(pendingKill.affectedPlayerId) ?? this.playerIds.find(id => id !== pendingKill.affectedPlayerId)!);
             const domain = this.players[targetPlayerId]?.domain ?? [];
             const idx = domain.findIndex(c => c.id === cardId);
             if (idx === -1) throw new Error('Target not found');
@@ -801,10 +825,37 @@ export class Game {
                 total += score;
             }
 
-            scores[pid] = { total, byColor, deckCounts };
+            const objectivePoints = this.revealHidden
+                ? ((this.objectiveResults?.[pid]?.gracefulMet ? OBJECTIVE_POINTS_EACH : 0)
+                    + (this.objectiveResults?.[pid]?.disgracefulMet ? OBJECTIVE_POINTS_EACH : 0))
+                : 0;
+            total += objectivePoints;
+
+            scores[pid] = { total, byColor, deckCounts, objectivePoints };
         }
 
         return scores;
+    }
+
+    private computeDomainSummary() {
+        const summary: NonNullable<GameState['domainSummary']> = {};
+        const zero: Record<CardColor, number> = { DG: 0, G: 0, R: 0, Y: 0, B: 0, W: 0 };
+        const weight = (c: Card) => (c.type === 'X2' ? 2 : 1);
+
+        for (const pid of this.playerIds) {
+            const byColorCounts: Record<CardColor, number> = { ...zero };
+            let spiesCount = 0;
+            const domain = this.players[pid]?.domain ?? [];
+            for (const c of domain) {
+                if (c.type === 'T') {
+                    spiesCount += 1;
+                    continue; // keep spies out of color buckets to avoid leaking hidden spy colors
+                }
+                byColorCounts[c.color] += weight(c);
+            }
+            summary[pid] = { byColorCounts, spiesCount };
+        }
+        return summary;
     }
 
     public getState(forPlayerId: string): GameState {
@@ -813,10 +864,28 @@ export class Game {
         const banquet = this.computeBanquetSummary();
         const banquetDetails = this.computeBanquetDetails();
         const scores = this.computeScores(banquet);
+        const domainSummary = this.computeDomainSummary();
+
+        const playerOrder = [...this.playerIds];
+
+        const finalRanking = this.revealHidden
+            ? playerOrder
+                .map((pid) => ({
+                    playerId: pid,
+                    name: this.displayName(pid),
+                    total: scores?.[pid]?.total ?? 0,
+                }))
+                .sort((a, b) => b.total - a.total)
+            : undefined;
+
+        const winner = finalRanking?.[0]?.playerId;
         const state: GameState = {
             players: {},
             queens: { 'all': [] },
             turn: this.currentTurn,
+            started: this.started,
+            maxPlayers: this.maxPlayers,
+            playerOrder,
             turnPlays: {
                 banquet: Boolean(turnMoves.banquet),
                 self: Boolean(turnMoves.self),
@@ -824,6 +893,7 @@ export class Game {
             },
             banquet,
             banquetDetails,
+            domainSummary,
             scores,
             revealHidden: this.revealHidden,
             deckRemaining: this.deck.length,
@@ -832,12 +902,15 @@ export class Game {
                     type: 'kill',
                     affectedPlayerId: this.pendingKill.affectedPlayerId,
                     area: this.pendingKill.area,
+                    targetPlayerId: this.pendingKill.targetPlayerId,
                     candidateCardIds: [...this.pendingKill.candidateCardIds],
                     hiddenTopCount: this.pendingKill.hiddenTopCount,
                     hiddenBottomCount: this.pendingKill.hiddenBottomCount,
                 }
                 : undefined,
             history: [...this.history],
+            winner,
+            finalRanking,
         };
 
         this.playerIds.forEach(pid => {

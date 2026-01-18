@@ -62,6 +62,10 @@ export interface GameState {
     // Keep legacy field for backwards-compat (UI no longer renders this as a pile).
     queens: Record<string, Card[]>;
     turn: string; // current player id
+    started?: boolean;
+    maxPlayers?: number;
+    // Stable turn/seating order (server authoritative)
+    playerOrder?: string[];
     turnPlays?: {
         banquet: boolean;
         self: boolean;
@@ -74,6 +78,8 @@ export interface GameState {
         type: 'kill';
         affectedPlayerId: string;
         area: 'self_domain' | 'opponent_domain' | 'banquet';
+        // For multiplayer: when a kill targets an opponent domain, this is the chosen opponent.
+        targetPlayerId?: string;
         candidateCardIds: string[];
         // Only for banquet kills: hidden (Espion) cards are targetable by position only.
         hiddenTopCount?: number;
@@ -98,12 +104,26 @@ export interface GameState {
         hiddenTopCount?: number;
         hiddenBottomCount?: number;
     };
+
+    // Domain summary for compact opponent views (does NOT include hidden spy colors).
+    domainSummary?: Record<string, {
+        byColorCounts: Record<CardColor, number>; // X2 counts as 2
+        spiesCount: number; // spies (hidden or revealed)
+    }>;
     scores?: Record<string, {
         total: number;
         byColor: Record<CardColor, number>;
         deckCounts: Record<CardColor, number>;
+        objectivePoints: number;
     }>;
     winner?: string;
+
+    // End-game standings (present when the game ends).
+    finalRanking?: Array<{
+        playerId: string;
+        name: string;
+        total: number;
+    }>;
 
     // Public event feed: play-by-play messages (keeps Espion identity secret mid-game).
     history?: HistoryItem[];
@@ -124,6 +144,8 @@ export interface CreateGameResponse {
 
 export interface CreateGameRequest {
     playerName?: string;
+    // Party size (2–4). Game starts automatically when this many players have joined.
+    partySize?: number;
     // Multiplies the per-color distribution (1 = default deck).
     deckMultiplier?: number;
     // Advanced deck customization.
@@ -155,7 +177,8 @@ export interface ClientEvents {
     'create_game': (data?: CreateGameRequest) => void;
     'join_game': (data: JoinGameRequest) => void;
     'leave_game': () => void;
-    'play_card': (data: { cardId: string, targetZone: PlayZone }) => void;
+    // If targetZone is 'opponent', targetPlayerId optionally selects which opponent (defaults to left neighbor).
+    'play_card': (data: { cardId: string; targetZone: PlayZone; targetPlayerId?: string }) => void;
     'resolve_kill': (data: { cardId?: string; hiddenSign?: 'top' | 'bottom' }) => void;
     'cancel_kill': () => void;
 }
