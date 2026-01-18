@@ -28,4 +28,4 @@ WORKDIR /app/server
 ENV PORT=8080
 ENV NODE_ENV=production
 EXPOSE 8080
-CMD ["node", "dist/src/index.js"]
+CMD ["node", "dist/server/src/index.js"]
