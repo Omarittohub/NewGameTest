@@ -76,12 +76,12 @@ export function useSocket() {
         };
     }, []);
 
-    const createGame = () => {
-        socket.emit('create_game');
+    const createGame = (options?: { playerName?: string; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
+        socket.emit('create_game', options);
     };
 
-    const joinGame = (joinGameId: string) => {
-        socket.emit('join_game', { gameId: joinGameId });
+    const joinGame = (joinGameId: string, options?: { playerName?: string }) => {
+        socket.emit('join_game', { gameId: joinGameId, ...options });
     };
 
     const leaveGame = () => {

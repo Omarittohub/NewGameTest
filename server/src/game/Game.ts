@@ -1,8 +1,25 @@
-import { Card, CardColor, CardType, GameState, PlayerState, PlayZone } from '../../../shared/types';
+import { Card, CardColor, CardType, GameState, Objective, ObjectiveId, PlayerState, PlayZone } from '../../../shared/types';
 
 // Constants
 const COLORS: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
 const TYPES: CardType[] = ['N', 'X2', 'S', 'K', 'T'];
+
+const COLOR_FULL_NAME: Record<CardColor, string> = {
+    DG: 'Dark Green',
+    G: 'Green',
+    R: 'Red',
+    Y: 'Yellow',
+    B: 'Blue',
+    W: 'White',
+};
+
+const TYPE_FULL_NAME: Record<CardType, string> = {
+    N: 'Normal',
+    X2: '×2',
+    S: 'Shield',
+    K: 'Killer',
+    T: 'Spy',
+};
 
 // Distribution (Heuristic based on standard gameplay feels)
 const DISTRIBUTION: Record<CardType, number> = {
@@ -14,8 +31,17 @@ const DISTRIBUTION: Record<CardType, number> = {
 };
 
 export class Game {
+    private deckMultiplier: number;
+    private deckOptions?: {
+        enabledColors?: Partial<Record<CardColor, boolean>>;
+        perColorTypeCounts?: Partial<Record<CardType, number>>;
+    };
     private deck: Card[] = [];
     private players: Record<string, PlayerState> = {};
+
+    private objectives: Record<string, { graceful: Objective; disgraceful: Objective }> = {};
+
+    private objectiveResults?: Record<string, { gracefulMet: boolean; disgracefulMet: boolean }>;
 
     // Banquet piles: +1 (top) and -1 (bottom)
     private banquetTop: Record<CardColor, Card[]> = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
@@ -37,18 +63,74 @@ export class Game {
         hiddenBottomCount?: number;
     };
 
+    private historySeq = 0;
+    private history: Array<NonNullable<GameState['history']>[number]> = [];
+
     // Track current turn moves
     private moves: Record<string, { banquet?: string; self?: string; opponent?: string }> = {};
 
-    constructor() {
+    constructor(options?: { deckMultiplier?: number; deckOptions?: { enabledColors?: Partial<Record<CardColor, boolean>>; perColorTypeCounts?: Partial<Record<CardType, number>> } }) {
+        const mult = Number(options?.deckMultiplier ?? 1);
+        this.deckMultiplier = Number.isFinite(mult) ? Math.max(1, Math.min(5, Math.floor(mult))) : 1;
+        this.deckOptions = options?.deckOptions;
         this.initializeDeck();
+    }
+
+    private displayName(playerId: string): string {
+        const n = (this.players[playerId]?.name ?? '').trim();
+        if (n) return n;
+        const idx = this.playerIds.indexOf(playerId);
+        return idx >= 0 ? `Player ${idx + 1}` : 'Player';
+    }
+
+    private pushHistory(item: Omit<NonNullable<GameState['history']>[number], 'id'>) {
+        this.historySeq += 1;
+        this.history.push({ id: String(this.historySeq), ...item });
+        // Avoid unbounded growth
+        if (this.history.length > 80) this.history.splice(0, this.history.length - 80);
+    }
+
+    private zoneLabel(playedBy: string, targetZone: PlayZone): string {
+        if (targetZone === 'self') return 'their domain';
+        if (targetZone === 'opponent') {
+            const opponentId = this.playerIds.find(id => id !== playedBy);
+            const oppName = opponentId ? this.displayName(opponentId) : 'opponent';
+            return `${oppName}'s domain`;
+        }
+        if (targetZone === 'banquet_top') return 'Grace (+1) on the Banquet';
+        return 'Disgrace (−1) on the Banquet';
+    }
+
+    private cardNameForHistory(card: Card): string {
+        // Keep Espion identity secret mid-game (no color/type leak beyond "Spy").
+        if (card.type === 'T' && !this.revealHidden) return 'a Spy card';
+        const color = COLOR_FULL_NAME[card.color];
+        const type = TYPE_FULL_NAME[card.type];
+        return card.type === 'K' || card.type === 'S'
+            ? `a ${color} ${type} card`
+            : `a ${color} ${type} card`;
     }
 
     private initializeDeck() {
         this.deck = [];
-        COLORS.forEach(color => {
+
+        const enabledColors = this.deckOptions?.enabledColors;
+        const colors = enabledColors
+            ? COLORS.filter(c => enabledColors[c] !== false)
+            : COLORS;
+
+        const overrideCounts = this.deckOptions?.perColorTypeCounts;
+        const clampCount = (n: number) => {
+            if (!Number.isFinite(n)) return 0;
+            return Math.max(0, Math.min(50, Math.floor(n)));
+        };
+
+        colors.forEach(color => {
             TYPES.forEach(type => {
-                const count = DISTRIBUTION[type];
+                const perColorBase = overrideCounts?.[type];
+                const count = typeof perColorBase === 'number'
+                    ? clampCount(perColorBase)
+                    : (DISTRIBUTION[type] * this.deckMultiplier);
                 for (let i = 0; i < count; i++) {
                     this.deck.push({
                         id: `${color}-${type}-${i}`,
@@ -87,6 +169,9 @@ export class Game {
             this.currentTurn = '';
             this.deck = [];
             this.revealHidden = false;
+            this.objectiveResults = undefined;
+            this.historySeq = 0;
+            this.history = [];
             this.banquetTop = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
             this.banquetBottom = { DG: [], G: [], R: [], Y: [], B: [], W: [] };
 
@@ -99,17 +184,24 @@ export class Game {
         }
     }
 
-    public addPlayer(id: string) {
+    public addPlayer(id: string, name?: string) {
         if (this.players[id]) return true;
         if (this.playerIds.length >= 2) return false;
         this.playerIds.push(id);
         this.players[id] = {
             id,
+            name,
             hand: [],
             domain: []
         };
         this.moves[id] = {};
         return true;
+    }
+
+    public setPlayerName(id: string, name?: string) {
+        const n = (name ?? '').trim();
+        if (!this.players[id]) return;
+        this.players[id].name = n ? n.slice(0, 20) : undefined;
     }
 
     public startGame() {
@@ -120,10 +212,172 @@ export class Game {
         this.hiddenBanquet = [];
         this.revealHidden = false;
         this.pendingKill = undefined;
+        this.objectiveResults = undefined;
+        this.historySeq = 0;
+        this.history = [];
+        this.assignObjectives();
         // Deal 3 cards to each player to start
         this.playerIds.forEach(id => this.drawCards(id, 3));
         this.currentTurn = this.playerIds[0];
         this.started = true;
+        this.pushHistory({ action: 'start', message: 'Game started.' });
+    }
+
+    private assignObjectives() {
+        const makeGraceful = (): Objective[] => {
+            const byColor: Objective[] = (['DG', 'G', 'R', 'Y', 'B', 'W'] as CardColor[]).map((c) => ({
+                id: `graceful_fewer_than_neighbor_${c}` as ObjectiveId,
+                kind: 'graceful',
+                title: `Fewer than Neighbor (${COLOR_FULL_NAME[c]})`,
+                description: `Have fewer ${COLOR_FULL_NAME[c]} cards in your collection than the player to your left.`,
+                color: c,
+            }));
+
+            return [
+                ...byColor,
+                {
+                    id: 'graceful_killer_2',
+                    kind: 'graceful',
+                    title: 'The Killer Objective',
+                    description: 'Have at least 2 Killer cards in your collection.',
+                },
+                {
+                    id: 'graceful_espion_3',
+                    kind: 'graceful',
+                    title: 'The Espion Objective',
+                    description: 'Have at least 3 Espion cards in your collection.',
+                },
+                {
+                    id: 'graceful_guard_4',
+                    kind: 'graceful',
+                    title: 'The Guard Objective',
+                    description: 'Have at least 4 Shield (Guard) cards in your collection.',
+                },
+                {
+                    id: 'graceful_noble_3',
+                    kind: 'graceful',
+                    title: 'The Noble Objective',
+                    description: 'Have at least 3 Noble cards in your collection.',
+                },
+            ];
+        };
+
+        const makeDisgraceful = (): Objective[] => {
+            const byColor: Objective[] = (['DG', 'G', 'R', 'Y', 'B', 'W'] as CardColor[]).map((c) => ({
+                id: `disgrace_family_negative_${c}` as ObjectiveId,
+                kind: 'disgraceful',
+                title: `Family in Disgrace (${COLOR_FULL_NAME[c]})`,
+                description: `${COLOR_FULL_NAME[c]} must have a negative final value on the Banquet.`,
+                color: c,
+            }));
+
+            return [
+                ...byColor,
+                {
+                    id: 'disgrace_deep_hatred',
+                    kind: 'disgraceful',
+                    title: 'Deep Hatred',
+                    description: 'At least one family has 5 or more cards in the negative section of the Banquet.',
+                },
+                {
+                    id: 'disgrace_universal_despisal',
+                    kind: 'disgraceful',
+                    title: 'Universal Despisal',
+                    description: 'Every family has at least one card in the negative section of the Banquet.',
+                },
+                {
+                    id: 'disgrace_dark_age',
+                    kind: 'disgraceful',
+                    title: 'Dark Age',
+                    description: 'At most 3 families are enlightened (positive on the Banquet).',
+                },
+                {
+                    id: 'disgrace_double_trouble',
+                    kind: 'disgraceful',
+                    title: 'Double Trouble',
+                    description: 'At least 2 different families are in disgrace (negative on the Banquet).',
+                },
+            ];
+        };
+
+        const shuffle = <T,>(arr: T[]): T[] => {
+            const a = [...arr];
+            for (let i = a.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [a[i], a[j]] = [a[j], a[i]];
+            }
+            return a;
+        };
+
+        const graceful = shuffle(makeGraceful());
+        const disgraceful = shuffle(makeDisgraceful());
+
+        this.objectives = {};
+        this.playerIds.forEach((pid, idx) => {
+            this.objectives[pid] = {
+                graceful: graceful[idx % graceful.length],
+                disgraceful: disgraceful[idx % disgraceful.length],
+            };
+        });
+    }
+
+    private evaluateObjectiveAtEnd(playerId: string, obj: Objective): boolean {
+        const domain = this.players[playerId]?.domain ?? [];
+        const countType = (t: CardType) => domain.filter(c => c.type === t).length;
+        const countNoble = () => domain.filter(c => c.type === 'N' || c.type === 'X2').length;
+
+        const colors: CardColor[] = ['DG', 'G', 'R', 'Y', 'B', 'W'];
+        const banquetValueByColor: Record<CardColor, number> = { DG: 0, G: 0, R: 0, Y: 0, B: 0, W: 0 };
+        const bottomCountByColor: Record<CardColor, number> = { DG: 0, G: 0, R: 0, Y: 0, B: 0, W: 0 };
+
+        const weight = (c: Card) => (c.type === 'X2' ? 2 : 1);
+        for (const c of colors) {
+            banquetValueByColor[c] =
+                this.banquetTop[c].reduce((s, card) => s + weight(card), 0)
+                - this.banquetBottom[c].reduce((s, card) => s + weight(card), 0);
+            bottomCountByColor[c] = this.banquetBottom[c].length;
+        }
+
+        switch (obj.id) {
+            case 'graceful_killer_2':
+                return countType('K') >= 2;
+            case 'graceful_espion_3':
+                return countType('T') >= 3;
+            case 'graceful_guard_4':
+                return countType('S') >= 4;
+            case 'graceful_noble_3':
+                return countNoble() >= 3;
+            case 'disgrace_deep_hatred':
+                return colors.some(c => bottomCountByColor[c] >= 5);
+            case 'disgrace_universal_despisal':
+                return colors.every(c => bottomCountByColor[c] >= 1);
+            case 'disgrace_dark_age':
+                return colors.filter(c => banquetValueByColor[c] > 0).length <= 3;
+            case 'disgrace_double_trouble':
+                return colors.filter(c => banquetValueByColor[c] < 0).length >= 2;
+            default:
+                break;
+        }
+
+        if (obj.id.startsWith('graceful_fewer_than_neighbor_')) {
+            const color = obj.color;
+            if (!color) return false;
+            const idx = this.playerIds.indexOf(playerId);
+            if (idx === -1 || this.playerIds.length < 2) return false;
+            const leftNeighborId = this.playerIds[(idx + 1) % this.playerIds.length];
+
+            const myCount = (this.players[playerId]?.domain ?? []).filter(c => c.color === color).length;
+            const neighborCount = (this.players[leftNeighborId]?.domain ?? []).filter(c => c.color === color).length;
+            return myCount < neighborCount;
+        }
+
+        if (obj.id.startsWith('disgrace_family_negative_')) {
+            const color = obj.color;
+            if (!color) return false;
+            return banquetValueByColor[color] < 0;
+        }
+
+        return false;
     }
 
     private drawCards(playerId: string, count: number) {
@@ -186,6 +440,50 @@ export class Game {
             currentMoves.opponent = card.id;
         }
 
+        // History message (Spy cards stay generic mid-game)
+        const actor = this.displayName(playerId);
+        const where = this.zoneLabel(playerId, targetZone);
+        const destination: NonNullable<GameState['history']>[number]['destination'] =
+            targetZone === 'self' ? 'my_domain'
+                : targetZone === 'opponent' ? 'opponent_domain'
+                    : targetZone === 'banquet_top' ? 'banquet_grace'
+                        : 'banquet_disgrace';
+        const opponentId = targetZone === 'opponent' ? this.playerIds.find(id => id !== playerId) : undefined;
+        const targetName = opponentId ? this.displayName(opponentId) : undefined;
+
+        if (card.type === 'T' && !this.revealHidden) {
+            this.pushHistory({
+                action: 'play',
+                actorId: playerId,
+                actorName: actor,
+                destination,
+                targetName,
+                card: { type: 'T', hidden: true },
+                message: `${actor} played a Spy card in ${where}.`,
+            });
+        } else if (card.type === 'K' && (targetZone === 'banquet_top' || targetZone === 'banquet_bottom')) {
+            this.pushHistory({
+                action: 'play',
+                actorId: playerId,
+                actorName: actor,
+                destination,
+                targetName,
+                card: { type: 'K', color: card.color },
+                message: `${actor} put a Killer in ${where}.`,
+            });
+        } else {
+            const hiddenSpy = card.type === 'T' && !this.revealHidden;
+            this.pushHistory({
+                action: 'play',
+                actorId: playerId,
+                actorName: actor,
+                destination,
+                targetName,
+                card: hiddenSpy ? { type: 'T', hidden: true } : { type: card.type, color: card.color },
+                message: `${actor} put ${this.cardNameForHistory(card)} in ${where}.`,
+            });
+        }
+
         // Killer requires an explicit target selection.
         if (card.type === 'K') {
             this.queueKill(playerId, targetZone);
@@ -243,6 +541,8 @@ export class Game {
         if (cardId && !pendingKill.candidateCardIds.includes(cardId)) throw new Error('Invalid kill target');
 
         const area = pendingKill.area;
+        const actor = this.displayName(actingPlayerId);
+        let killedCard: Card | undefined;
         if (area === 'banquet') {
             if (!cardId) {
                 // Kill a hidden banquet card by position without revealing identity.
@@ -250,6 +550,16 @@ export class Game {
                 if (idx === -1) throw new Error('No hidden card at that position');
                 this.hiddenBanquet.splice(idx, 1);
                 this.pendingKill = undefined;
+
+                const where = hiddenSign === 'top' ? 'Grace (+1) on the Banquet' : 'Disgrace (−1) on the Banquet';
+                this.pushHistory({
+                    action: 'kill_hidden',
+                    actorId: actingPlayerId,
+                    actorName: actor,
+                    destination: hiddenSign === 'top' ? 'banquet_grace' : 'banquet_disgrace',
+                    card: { hidden: true },
+                    message: `${actor} destroyed a hidden card from ${where}.`,
+                });
 
                 const turnMoves = this.moves[this.currentTurn] ?? {};
                 if (turnMoves.banquet && turnMoves.self && turnMoves.opponent) {
@@ -263,9 +573,9 @@ export class Game {
             (Object.keys(this.banquetTop) as CardColor[]).forEach(color => {
                 if (removed) return;
                 const ti = this.banquetTop[color].findIndex(c => c.id === cardId);
-                if (ti !== -1) { this.banquetTop[color].splice(ti, 1); removed = true; return; }
+                if (ti !== -1) { killedCard = this.banquetTop[color][ti]; this.banquetTop[color].splice(ti, 1); removed = true; return; }
                 const bi = this.banquetBottom[color].findIndex(c => c.id === cardId);
-                if (bi !== -1) { this.banquetBottom[color].splice(bi, 1); removed = true; return; }
+                if (bi !== -1) { killedCard = this.banquetBottom[color][bi]; this.banquetBottom[color].splice(bi, 1); removed = true; return; }
             });
 
             if (!removed) throw new Error('Target not found');
@@ -277,7 +587,30 @@ export class Game {
             const idx = domain.findIndex(c => c.id === cardId);
             if (idx === -1) throw new Error('Target not found');
             if (domain[idx].type === 'S') throw new Error('Shields cannot be killed');
+            killedCard = domain[idx];
             domain.splice(idx, 1);
+        }
+
+        if (killedCard) {
+            if (killedCard.type === 'T' && !this.revealHidden) {
+                this.pushHistory({
+                    action: 'kill',
+                    actorId: actingPlayerId,
+                    actorName: actor,
+                    card: { type: 'T', hidden: true },
+                    message: `${actor} killed a Spy card.`,
+                });
+            } else {
+                const color = COLOR_FULL_NAME[killedCard.color];
+                const type = TYPE_FULL_NAME[killedCard.type];
+                this.pushHistory({
+                    action: 'kill',
+                    actorId: actingPlayerId,
+                    actorName: actor,
+                    card: { type: killedCard.type, color: killedCard.color },
+                    message: `${actor} killed a ${color} ${type} card.`,
+                });
+            }
         }
 
         this.pendingKill = undefined;
@@ -294,6 +627,14 @@ export class Game {
         if (actingPlayerId !== this.pendingKill.affectedPlayerId) throw new Error('Not your decision');
 
         this.pendingKill = undefined;
+
+        const actor = this.displayName(actingPlayerId);
+        this.pushHistory({
+            action: 'kill_none',
+            actorId: actingPlayerId,
+            actorName: actor,
+            message: `${actor} didn't kill anyone.`,
+        });
 
         const turnMoves = this.moves[this.currentTurn] ?? {};
         if (turnMoves.banquet && turnMoves.self && turnMoves.opponent) {
@@ -358,6 +699,17 @@ export class Game {
             else this.banquetBottom[h.card.color].push(h.card);
         });
         this.hiddenBanquet = [];
+
+        // Evaluate objectives (only once, after reveal)
+        this.objectiveResults = {};
+        this.playerIds.forEach(pid => {
+            const obj = this.objectives[pid];
+            if (!obj) return;
+            this.objectiveResults![pid] = {
+                gracefulMet: this.evaluateObjectiveAtEnd(pid, obj.graceful),
+                disgracefulMet: this.evaluateObjectiveAtEnd(pid, obj.disgraceful),
+            };
+        });
     }
 
     private computeBanquetSummary() {
@@ -485,6 +837,7 @@ export class Game {
                     hiddenBottomCount: this.pendingKill.hiddenBottomCount,
                 }
                 : undefined,
+            history: [...this.history],
         };
 
         this.playerIds.forEach(pid => {
@@ -520,10 +873,22 @@ export class Game {
 
             state.players[pid] = {
                 id: pid,
+                name: p.name,
                 hand: hand as Card[],
                 domain: domain as Card[]
             };
         });
+
+        // Private objectives: only the requesting player sees them.
+        const myObj = this.objectives[forPlayerId];
+        if (myObj) {
+            state.myObjectives = {
+                graceful: myObj.graceful,
+                disgraceful: myObj.disgraceful,
+                gracefulMet: this.revealHidden ? this.objectiveResults?.[forPlayerId]?.gracefulMet : undefined,
+                disgracefulMet: this.revealHidden ? this.objectiveResults?.[forPlayerId]?.disgracefulMet : undefined,
+            };
+        }
 
         return state;
     }

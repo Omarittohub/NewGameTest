@@ -14,8 +14,47 @@ export interface Card {
 
 export interface PlayerState {
     id: string;
+    name?: string;
     hand: Card[];
     domain: Card[]; // Cards in "My Domain"
+}
+
+export type ObjectiveKind = 'graceful' | 'disgraceful';
+export type ObjectiveId =
+    | `graceful_fewer_than_neighbor_${CardColor}`
+    | 'graceful_killer_2'
+    | 'graceful_espion_3'
+    | 'graceful_guard_4'
+    | 'graceful_noble_3'
+    | `disgrace_family_negative_${CardColor}`
+    | 'disgrace_deep_hatred'
+    | 'disgrace_universal_despisal'
+    | 'disgrace_dark_age'
+    | 'disgrace_double_trouble';
+
+export interface Objective {
+    id: ObjectiveId;
+    kind: ObjectiveKind;
+    title: string;
+    description: string;
+    color?: CardColor;
+}
+
+export interface HistoryItem {
+    id: string;
+    message: string;
+
+    // Optional structured fields for richer UI rendering.
+    action?: 'start' | 'play' | 'kill' | 'kill_hidden' | 'kill_none';
+    actorId?: string;
+    actorName?: string;
+    destination?: 'my_domain' | 'opponent_domain' | 'banquet_grace' | 'banquet_disgrace';
+    targetName?: string;
+    card?: {
+        type?: CardType;
+        color?: CardColor;
+        hidden?: boolean;
+    };
 }
 
 export interface GameState {
@@ -65,14 +104,40 @@ export interface GameState {
         deckCounts: Record<CardColor, number>;
     }>;
     winner?: string;
+
+    // Public event feed: play-by-play messages (keeps Espion identity secret mid-game).
+    history?: HistoryItem[];
+
+    // Objectives are private: server only includes this for the requesting player.
+    myObjectives?: {
+        graceful: Objective;
+        disgraceful: Objective;
+        // Only revealed at end-game (to avoid leaking hidden info mid-game).
+        gracefulMet?: boolean;
+        disgracefulMet?: boolean;
+    };
 }
 
 export interface CreateGameResponse {
     gameId: string;
 }
 
+export interface CreateGameRequest {
+    playerName?: string;
+    // Multiplies the per-color distribution (1 = default deck).
+    deckMultiplier?: number;
+    // Advanced deck customization.
+    deckOptions?: {
+        // Toggle which families exist in the deck (default: all enabled).
+        enabledColors?: Partial<Record<CardColor, boolean>>;
+        // Per-color distribution (applied to each enabled color). Overrides deckMultiplier.
+        perColorTypeCounts?: Partial<Record<CardType, number>>;
+    };
+}
+
 export interface JoinGameRequest {
     gameId: string;
+    playerName?: string;
 }
 
 export interface JoinedGameResponse {
@@ -87,7 +152,7 @@ export interface ServerEvents {
 }
 
 export interface ClientEvents {
-    'create_game': () => void;
+    'create_game': (data?: CreateGameRequest) => void;
     'join_game': (data: JoinGameRequest) => void;
     'leave_game': () => void;
     'play_card': (data: { cardId: string, targetZone: PlayZone }) => void;

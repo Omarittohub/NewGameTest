@@ -53,7 +53,8 @@ function cleanupRoomIfEmpty(io, gameId) {
 function setupSocketHandlers(io) {
     io.on('connection', (socket) => {
         console.log('User connected:', socket.id);
-        socket.on('create_game', () => __awaiter(this, void 0, void 0, function* () {
+        socket.on('create_game', (data) => __awaiter(this, void 0, void 0, function* () {
+            var _a, _b;
             // Leave any prior game
             const prevGameId = getSocketGameId(socket);
             if (prevGameId) {
@@ -64,10 +65,13 @@ function setupSocketHandlers(io) {
             let gameId = generateGameId();
             while (rooms.has(gameId))
                 gameId = generateGameId();
-            const game = new Game_1.Game();
+            const deckMultiplier = Number((_a = data === null || data === void 0 ? void 0 : data.deckMultiplier) !== null && _a !== void 0 ? _a : 1);
+            const deckOptions = data === null || data === void 0 ? void 0 : data.deckOptions;
+            const game = new Game_1.Game({ deckMultiplier, deckOptions });
             rooms.set(gameId, { id: gameId, game });
             // Join creator as player 1
-            const added = game.addPlayer(socket.id);
+            const playerName = ((_b = data === null || data === void 0 ? void 0 : data.playerName) !== null && _b !== void 0 ? _b : '').trim();
+            const added = game.addPlayer(socket.id, playerName || undefined);
             if (!added) {
                 rooms.delete(gameId);
                 socket.emit('game_error', 'Failed to create game');
@@ -80,6 +84,7 @@ function setupSocketHandlers(io) {
             yield broadcastRoomState(io, gameId);
         }));
         socket.on('join_game', (data) => __awaiter(this, void 0, void 0, function* () {
+            var _a;
             const gameId = ((data === null || data === void 0 ? void 0 : data.gameId) || '').trim().toUpperCase();
             if (!gameId) {
                 socket.emit('game_error', 'Game code is required');
@@ -98,7 +103,8 @@ function setupSocketHandlers(io) {
                 cleanupRoomIfEmpty(io, prevGameId);
             }
             console.log('Player joining:', socket.id, '->', gameId);
-            const added = room.game.addPlayer(socket.id);
+            const playerName = ((_a = data === null || data === void 0 ? void 0 : data.playerName) !== null && _a !== void 0 ? _a : '').trim();
+            const added = room.game.addPlayer(socket.id, playerName || undefined);
             if (!added) {
                 socket.emit('game_error', 'Game is full');
                 return;

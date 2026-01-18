@@ -54,7 +54,7 @@ export function setupSocketHandlers(io: Server) {
     io.on('connection', (socket: Socket) => {
         console.log('User connected:', socket.id);
 
-        socket.on('create_game', async () => {
+        socket.on('create_game', async (data?: { playerName?: string; deckMultiplier?: number; deckOptions?: { enabledColors?: Record<string, boolean>; perColorTypeCounts?: Record<string, number> } }) => {
             // Leave any prior game
             const prevGameId = getSocketGameId(socket);
             if (prevGameId) {
@@ -66,11 +66,14 @@ export function setupSocketHandlers(io: Server) {
             let gameId = generateGameId();
             while (rooms.has(gameId)) gameId = generateGameId();
 
-            const game = new Game();
+            const deckMultiplier = Number(data?.deckMultiplier ?? 1);
+            const deckOptions = data?.deckOptions as any;
+            const game = new Game({ deckMultiplier, deckOptions });
             rooms.set(gameId, { id: gameId, game });
 
             // Join creator as player 1
-            const added = game.addPlayer(socket.id);
+            const playerName = (data?.playerName ?? '').trim();
+            const added = game.addPlayer(socket.id, playerName || undefined);
             if (!added) {
                 rooms.delete(gameId);
                 socket.emit('game_error', 'Failed to create game');
@@ -85,7 +88,7 @@ export function setupSocketHandlers(io: Server) {
             await broadcastRoomState(io, gameId);
         });
 
-        socket.on('join_game', async (data: { gameId: string }) => {
+        socket.on('join_game', async (data: { gameId: string; playerName?: string }) => {
             const gameId = (data?.gameId || '').trim().toUpperCase();
             if (!gameId) {
                 socket.emit('game_error', 'Game code is required');
@@ -107,7 +110,8 @@ export function setupSocketHandlers(io: Server) {
             }
 
             console.log('Player joining:', socket.id, '->', gameId);
-            const added = room.game.addPlayer(socket.id);
+            const playerName = (data?.playerName ?? '').trim();
+            const added = room.game.addPlayer(socket.id, playerName || undefined);
             if (!added) {
                 socket.emit('game_error', 'Game is full');
                 return;
